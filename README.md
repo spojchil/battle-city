@@ -34,7 +34,7 @@ cd server
 uv run linx-game-probe        # 连通性测试服务，默认端口 8000，PORT 环境变量可改
 ```
 
-SSE 端点为 `/mcp`，消息端点为 `/mcp/message`。灵矽平台需要能从公网访问该地址。
+MCP 端点为 `/mcp`（Streamable HTTP）。灵矽平台需要能从公网访问该地址。
 
 ## 开发流程
 

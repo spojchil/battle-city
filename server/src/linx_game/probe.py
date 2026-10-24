@@ -54,9 +54,10 @@ class HeaderLogMiddleware:
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
-    app = mcp.sse_app(
-        sse_path="/mcp",
-        message_path="/mcp/message",
+    app = mcp.streamable_http_app(
+        streamable_http_path="/mcp",
+        # 每次请求独立处理，会话由平台的 X-Linx-Session-Id 标识
+        stateless_http=True,
         host="0.0.0.0",
         # 平台从公网访问，Host 不固定，关闭 DNS rebinding 校验
         transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
