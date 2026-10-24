@@ -11,6 +11,7 @@
 ```
 .
 ├── docs/                 架构设计、产品设计文档
+├── server/               MCP 服务（Python，uv 管理）
 ├── .env.example          环境变量模板
 └── README.md
 ```
@@ -23,6 +24,17 @@ cp .env.example .env
 ```
 
 API Key 在[灵矽控制台 · API Key 管理](https://xrobo.qiniu.com/#/api-key-management)创建。`.env` 已被 `.gitignore` 忽略，不会提交。
+
+## 运行 MCP 服务
+
+需要 [uv](https://docs.astral.sh/uv/)。
+
+```bash
+cd server
+uv run linx-game-probe        # 连通性测试服务，默认端口 8000，PORT 环境变量可改
+```
+
+SSE 端点为 `/mcp`，消息端点为 `/mcp/message`。灵矽平台需要能从公网访问该地址。
 
 ## 开发流程
 
