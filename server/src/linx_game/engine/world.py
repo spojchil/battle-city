@@ -44,6 +44,11 @@ def flags_match(cond: dict, flags: dict) -> bool:
     return all(flags.get(k) == v for k, v in cond.items())
 
 
+# 语音后端没有报告播放结束时，一段话最多按「余量 + 每字时长」估计的时间算作仍在说（秒）
+SPEECH_SLACK_S = 3.0
+SPEECH_PER_CHAR_S = 0.4
+
+
 @dataclass
 class Speech:
     id: int
@@ -53,6 +58,7 @@ class Speech:
     sentences: list[str]
     t: float
     spoken: list[str] = field(default_factory=list)   # 已开始播放的句子
+    heard_by: set[str] = field(default_factory=set)    # 听清了至少一句的人
     done: bool = False
     aborted: bool = False
     _next: int = field(default=0, repr=False)          # 模拟播放：下一句序号
@@ -138,6 +144,7 @@ class World:
         self.progress: dict[tuple[str, str], float] = {}   # cumulative 行动被打断后保留的进度
         self.recordings: dict[str, list[Percept]] = {c.id: [] for c in scenario.characters if c.player}
         self.photos: dict[str, list[dict]] = {}
+        self.live_speaking: set[str] = set()   # 正在用麦克风说话的玩家（尚未识别成文字）
         self.voice: VoiceBackend | None = None
         self._subscribers: list[Callable[[Event], None]] = []
         self._speech_ids = itertools.count(1)
@@ -307,6 +314,18 @@ class World:
             self.voice.start(sp)
         return sp
 
+    def speaking_nearby(self, cid: str) -> list[Character]:
+        """此刻正在说话、且 cid 能听清的其他角色，包括正按着麦克风说话的玩家。"""
+        now = self.now()
+        return [o for o in self.characters.values()
+                if o.id != cid and (self._speech_alive(o, now) or o.id in self.live_speaking)
+                and self.audibility(o.id, cid)[0] == CLEAR]
+
+    @staticmethod
+    def _speech_alive(c: Character, now: float) -> bool:
+        sp = c.speech
+        return sp is not None and now - sp.t < SPEECH_SLACK_S + SPEECH_PER_CHAR_S * len(sp.text)
+
     def stop_speaking(self, cid: str) -> str:
         c = self.characters[cid]
         if not c.speech:
@@ -321,7 +340,8 @@ class World:
         if sp is None or sp.id != speech_id:
             return
         sp.spoken.append(sentence)
-        self._hear_sentence(c, sentence, sp.volume, speech_id)
+        hearers = self._hear_sentence(c, sentence, sp.volume, speech_id)
+        sp.heard_by.update(o for o, h in hearers.items() if h["level"] == CLEAR)
 
     def speech_finished(self, cid: str, speech_id: int, aborted: bool) -> None:
         c = self.characters[cid]
@@ -330,7 +350,8 @@ class World:
             return
         sp.done, sp.aborted = True, aborted
         c.speech = None
-        self._emit("speech_end", cid=cid, speech_id=speech_id, aborted=aborted, spoken=sp.spoken_text)
+        self._emit("speech_end", cid=cid, speech_id=speech_id, aborted=aborted, spoken=sp.spoken_text,
+                   heard_by=sorted(sp.heard_by))
 
     def player_said(self, cid: str, text: str, volume: str = "正常") -> None:
         """玩家真人语音（已说出）：立即按句产生听觉感知。"""
@@ -607,7 +628,7 @@ class World:
                     out.append((o, level, round(gain, 3)))
         return out
 
-    def _hear_sentence(self, c: Character, sentence: str, volume: str, speech_id: int | None) -> None:
+    def _hear_sentence(self, c: Character, sentence: str, volume: str, speech_id: int | None) -> dict:
         place = self.place_name(c.pos)
         hearers = {}
         for o, level, gain in self._hearers(c, volume):
@@ -630,6 +651,7 @@ class World:
             self.recordings[c.id].append(p)
         self._emit("speech", cid=c.id, speech_id=speech_id, sentence=sentence, volume=volume,
                    pos=list(c.pos), hearers=hearers)
+        return hearers
 
     def _emit_sound(self, c: Character, act: Action) -> None:
         s = act.sound
