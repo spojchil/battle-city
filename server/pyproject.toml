@@ -11,6 +11,7 @@ dependencies = [
     "mcp[cli]>=2.3.0",
     "numpy>=2.5.4",
     "python-dotenv>=1.2.4",
+    "pyyaml>=6.0.3",
     "uvicorn>=0.54.0",
     "websockets>=17.3",
 ]
@@ -24,3 +25,8 @@ linx-speaker-check = "linx_game.devtools.speaker_check:main"
 [build-system]
 requires = ["uv_build>=0.12.24,<0.13.0"]
 build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
