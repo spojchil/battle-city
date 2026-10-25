@@ -134,6 +134,7 @@ class World:
         self.flags: dict = {}
         for it in scenario.interactables:
             self.flags.update(it.flags)
+        self._pending_cues = list(scenario.cues)
         self.progress: dict[tuple[str, str], float] = {}   # cumulative 行动被打断后保留的进度
         self.recordings: dict[str, list[Percept]] = {c.id: [] for c in scenario.characters if c.player}
         self.photos: dict[str, list[dict]] = {}
@@ -169,7 +170,15 @@ class World:
                 self._advance_job(c, dt)
             if self.voice is None and c.speech:
                 self._advance_sim(c, dt)
+        self._fire_cues()
         self._flush_visibility()
+
+    def _fire_cues(self) -> None:
+        now = self.now()
+        for cue in list(self._pending_cues):
+            if (cue.at_s is None or now >= cue.at_s) and flags_match(cue.when, self.flags):
+                self._pending_cues.remove(cue)
+                self._perceive(self.characters[cue.to], "cue", cue.text, True)
 
     async def run(self, hz: float = 10) -> None:
         """以固定频率循环调用 tick，直到被取消。"""
