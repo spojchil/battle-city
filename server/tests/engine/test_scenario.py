@@ -45,6 +45,9 @@ def _broken(data: dict, mutate) -> str:
      "interactables[1].actions[0].sound.volume"),
     (lambda d: d["interactables"][0]["actions"][0]["on_complete"]["notify"].update(nobody="x"),
      "interactables[0].actions[0].on_complete.notify: 未知角色 'nobody'"),
+    (lambda d: d["map"]["legend"]["a"].update(see_through_when={"x": 1}),
+     "map.legend.'a'.see_through_when: 只允许用于 door 格"),
+    (lambda d: d["map"]["legend"]["k"].update(see_through_when="ajar"), "map.legend.'k'.see_through_when: 应为映射"),
 ])
 def test_validation_errors(mini_data, mutate, expected):
     assert expected in _broken(mini_data, mutate)

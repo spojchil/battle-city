@@ -52,3 +52,26 @@ def test_render_offstage_and_door(h):
     assert "阿美（住客）" in render(w, "player", [])
     assert "除你之外没有别人" in render(w, "worker", [])
     assert "【位置】你在门外。" in render(w, "worker", [])
+
+
+def test_see_through_ajar_door(h):
+    w = h.world
+    h.place("player", 5, 3)                    # 紧挨通往办公室的门 (5, 4)
+    w.say("guard", "这句话要说得久一点才行。")
+    closed = render(w, "player", [])
+    assert "小张" not in closed and "抽屉" not in closed
+    assert w.photo("player")["people"] == []
+
+    w.flags["office_door"] = "ajar"
+    opened = render(w, "player", [])
+    assert "- 小张（保安）：正在说话（透过虚掩的门看到）" in opened
+    assert "- 抽屉（drawer）：抽屉锁着（透过虚掩的门看到）" in opened
+    scene = w.photo("player")
+    assert scene["people"][0]["through_door"] and scene["objects"][-1]["through_door"]
+    assert "小张（保安）：正在说话（透过虚掩的门看到）" in scene["text"]
+    assert "抽屉：抽屉锁着（透过虚掩的门看到）" in scene["text"]
+
+    assert "我（住客）" not in render(w, "guard", [])     # 不做反向可见
+    assert not w.step("player", 0, 1)                    # 通行规则不变
+    h.place("player", 4, 3)                              # 不在门边则看不到
+    assert "小张" not in render(w, "player", [])

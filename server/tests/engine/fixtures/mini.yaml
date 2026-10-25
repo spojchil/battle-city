@@ -5,7 +5,7 @@
 #   y1 s#aaaaaaa+bbb#     a 休息区  b 走廊  + 普通门
 #   y2 s=aaaaaaa#bbb#     s 门外（场外） = 通往门外的门
 #   y3 s#aaaaaaa#bbb#
-#   y4 #####k####+###     k 只有 worker 能通过的门
+#   y4 #####k####+###     k 只有 worker 能通过的门；office_door 为 ajar 时虚掩
 #   y5 ##ccccccc#ddd#     c 办公室  d 储藏间
 #   y6 ##ccccccc#ddd#
 #   y7 ##############
@@ -24,7 +24,7 @@ map:
     "d": {kind: floor, room: store}
     "+": {kind: door}
     "=": {kind: door}
-    "k": {kind: door, allowed: [worker]}
+    "k": {kind: door, allowed: [worker], see_through_when: {office_door: ajar}}
   grid: |
     ##############
     s#aaaaaaa+bbb#
@@ -77,6 +77,13 @@ interactables:
         on_complete:
           set: {safe: open}
           reveal: 柜门开了。
+  - id: drawer
+    name: 抽屉
+    pos: [8, 6]
+    flags: {drawer: locked}
+    describe:
+      - when: {drawer: locked}
+        text: 抽屉锁着
 characters:
   - id: player
     name: 我
