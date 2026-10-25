@@ -1,5 +1,8 @@
 import pytest
+import yaml
+from conftest import MINI
 
+from linx_game.engine import World, load_scenario, parse_scenario
 from linx_game.engine.grid import chebyshev
 
 
@@ -389,6 +392,19 @@ def test_snapshot_for_viewer(h):
     w.flags["office_door"] = "ajar"
     assert "guard" in {c["id"] for c in view()["characters"]}
     assert "drawer" in {it["id"] for it in view()["interactables"]}
+
+
+def test_open_plan_rooms_see_each_other():
+    data = yaml.safe_load(MINI.read_text())
+    rows = data["map"]["grid"].splitlines()
+    rows[2] = rows[2][:9] + "a" + rows[2][10:]          # 打通休息区与走廊之间的墙
+    data["map"]["grid"] = "\n".join(rows) + "\n"
+    w = World(parse_scenario(data))
+    assert w.grid.areas["lounge"] == {"lounge", "hall"}
+    assert w.grid.areas["office"] == {"office"}
+    w.characters["player"].pos, w.characters["guest"].pos = (2, 1), (11, 3)
+    assert "guest" in {o.id for o in w.visible_characters("player")}
+    assert World(load_scenario(MINI)).grid.areas["lounge"] == {"lounge"}
 
 
 def test_snapshot_and_events(h):

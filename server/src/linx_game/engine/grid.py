@@ -39,6 +39,30 @@ class Grid:
         self.rooms = scenario.rooms
         self.blocked = {it.pos for it in scenario.interactables}   # 可交互点所在格不可通行
         self._sound_cache: dict[Pos, dict[Pos, float]] = {}
+        self.areas = self._open_areas()
+
+    def _open_areas(self) -> dict[str, frozenset[str]]:
+        """每个场内房间所在的开敞区域：地板格直接相邻（中间没有墙或门）的房间互相看得见。"""
+        parent = {r: r for r in self.rooms}
+
+        def find(r: str) -> str:
+            while parent[r] != r:
+                r = parent[r]
+            return r
+
+        for y in range(self.height):
+            for x in range(self.width):
+                a = self.room_at((x, y))
+                if a is None or self.rooms[a].offstage:
+                    continue
+                for nxt in ((x + 1, y), (x, y + 1)):
+                    b = self.room_at(nxt)
+                    if b is not None and b != a and not self.rooms[b].offstage:
+                        parent[find(a)] = find(b)
+        groups: dict[str, set[str]] = {}
+        for r in self.rooms:
+            groups.setdefault(find(r), set()).add(r)
+        return {r: frozenset(groups[find(r)]) for r in self.rooms}
 
     def cell(self, pos: Pos) -> Cell | None:
         return self.scenario.cell(pos)
