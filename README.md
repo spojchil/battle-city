@@ -4,13 +4,14 @@
 
 > 议题：灵矽应用 —— 做一款语音类游戏（不能是跑团），如狼人杀。
 
-基于[灵矽 AI](https://linx.qiniu.com/) 硬件智能体平台的语音游戏。玩法设计讨论中，确定后在此补充。
+基于[灵矽 AI](https://linx.qiniu.com/) 硬件智能体平台的语音游戏。
 
 ## 目录结构
 
 ```
 .
 ├── docs/                 架构设计、产品设计文档
+├── server/               MCP 服务（Python，uv 管理）
 ├── .env.example          环境变量模板
 └── README.md
 ```
@@ -23,6 +24,17 @@ cp .env.example .env
 ```
 
 API Key 在[灵矽控制台 · API Key 管理](https://xrobo.qiniu.com/#/api-key-management)创建。`.env` 已被 `.gitignore` 忽略，不会提交。
+
+## 运行 MCP 服务
+
+需要 [uv](https://docs.astral.sh/uv/)。
+
+```bash
+cd server
+uv run linx-game-probe        # 连通性测试服务，默认端口 8000，PORT 环境变量可改
+```
+
+MCP 端点为 `/mcp`（Streamable HTTP）。灵矽平台需要能从公网访问该地址。
 
 ## 开发流程
 
