@@ -35,6 +35,15 @@ def roll_dice(ctx: Context, sides: int = 6) -> str:
     return f"掷出了 {value} 点（{sides} 面骰）。"
 
 
+@mcp.tool(
+    description="记录一条玩家发言。用户要求「记录发言」时调用：speaker 填声纹识别出的当前说话人称呼，"
+    "无法识别时填「未知」；content 填要记录的内容。"
+)
+def record_speech(ctx: Context, speaker: str, content: str) -> str:
+    log.info("record_speech speaker=%s content=%s headers=%s", speaker, content, _linx_headers(ctx))
+    return f"已记录 {speaker} 的发言。"
+
+
 class HeaderLogMiddleware:
     """记录每个 HTTP 请求中以 x- 开头的请求头。"""
 
