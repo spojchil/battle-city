@@ -7,23 +7,25 @@
 """
 
 import logging
-from collections.abc import Callable
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from mcp.server.mcpserver import Context, MCPServer
 
 from linx_game.engine.world import World
 
+if TYPE_CHECKING:
+    from linx_game.runtime.brain import Brain
+
 log = logging.getLogger("linx_game.tools")
 
 mcp = MCPServer("linx-game")
 
-# 设备 MAC（大写）→ (世界, 角色 id, 结果回调)，由运行时在开局时登记；
-# 结果回调把工具执行结果交给角色的思考循环，写入其记忆
-actors: dict[str, tuple[World, str, Callable[[str], None]]] = {}
+# 设备 MAC（大写）→ (世界, 角色 id, 思考循环)，由运行时在开局时登记；
+# 工具执行结果交给角色的思考循环，写入其记忆
+actors: dict[str, tuple[World, str, "Brain"]] = {}
 
 
-def _actor(ctx: Context) -> tuple[World, str, Callable[[str], None]] | None:
+def _actor(ctx: Context) -> tuple[World, str, "Brain"] | None:
     request = ctx.request_context.request
     device = request.headers.get("x-linx-device-id", "").upper() if request is not None else ""
     return actors.get(device)
@@ -33,11 +35,11 @@ def _act(ctx: Context, name: str, **args) -> str:
     actor = _actor(ctx)
     if actor is None:
         return "当前没有进行中的游戏。"
-    world, cid, record = actor
+    world, cid, brain = actor
     result = getattr(world, name)(cid, **args)
     if name == "say":
         result = "开始说话。"
-    record(result)
+    brain.record_result(result)
     log.info("tool %s %s %s -> %s", cid, name, args, result)
     return result
 
@@ -72,9 +74,17 @@ async def stop(ctx: Context) -> str:
     return _act(ctx, "stop")
 
 
-@mcp.tool(description="等待：什么都不改变，继续手上正在做的事，等待新的情况。")
-async def wait(ctx: Context) -> str:
+@mcp.tool(description="等待：什么都不改变，继续手上正在做的事。seconds 大于 0 时，到时间会再给你一次思考的机会"
+                      "（例如「过一两分钟再进去」）；有新情况时会提前叫你。")
+async def wait(ctx: Context, seconds: int = 0) -> str:
     actor = _actor(ctx)
-    if actor is not None:
-        actor[2]("你继续等待。")
-    return "你继续等待。"
+    if actor is None:
+        return "当前没有进行中的游戏。"
+    _, cid, brain = actor
+    seconds = max(0, min(int(seconds), 300))
+    result = f"你等待约 {seconds} 秒。" if seconds else "你继续等待。"
+    if seconds:
+        brain.wake_after(seconds)
+    brain.record_result(result)
+    log.info("tool %s wait %s", cid, seconds)
+    return result

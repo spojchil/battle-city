@@ -17,7 +17,7 @@ from linx_game.runtime.session import LinxSession
 log = logging.getLogger("linx_game.brain")
 
 # 剧情进展由感知与提示驱动；没有新感知时，最长隔多久再给角色一次思考机会（秒）
-IDLE_S = 120
+IDLE_S = 60
 # 被唤醒后等待感知平静下来再思考：一段话按句到达，等对方说完再一并处理（秒）
 SETTLE_S = 1.5
 SETTLE_MAX_S = 6
@@ -29,7 +29,7 @@ HISTORY_LIMIT = 40
 PROMPT = """你在操控一场实时语音推理游戏中的角色「{name}」（{role}）。
 
 ## 如何行动
-- 你只能通过工具影响世界：说话用 say，移动用 move_to，操作物品用 interact，放弃正在做的事用 stop，中止正在说的话用 stop_speaking，继续手上的事或等待用 wait。
+- 你只能通过工具影响世界：说话用 say，移动用 move_to，操作物品用 interact，放弃正在做的事用 stop，中止正在说的话用 stop_speaking，继续手上的事或等待用 wait（想过一会儿再行动时可指定秒数）。
 - 正文不会被任何人看到或听到。正文只写角色此刻的内心想法，一两句即可。说出口的每一句话都必须通过 say。
 - 世界按真实时间流动，不会等你。你每次收到的是角色此刻的感知。一次可以调用零到多个工具；暂时不需要行动时，只写想法、不调用工具。
 - 说话像真人对话：口语、简短，一次一两句。只有附近的人听得到你，离得远的人听不到或听不清。
@@ -113,6 +113,10 @@ class Brain:
 
     def _on_platform(self, data: dict) -> None:
         log.debug("platform %s %s", self.cid, data)
+
+    def wake_after(self, seconds: float) -> None:
+        """角色要求过一段时间再想一想（wait 工具）。"""
+        asyncio.get_running_loop().call_later(seconds, self.wake)
 
     def wake(self) -> None:
         self._wake.set()

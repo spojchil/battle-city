@@ -94,7 +94,7 @@ class Game:
             router.mouths[char.id] = Mouth(self.world, char.id, mouth_session, self._on_audio)
             llm_gateway.controllers[brain_session.mac] = brain
             llm_gateway.silent_devices.add(mouth_session.mac)
-            tools.actors[brain_session.mac] = (self.world, char.id, brain.record_result)
+            tools.actors[brain_session.mac] = (self.world, char.id, brain)
             self.sessions += [brain_session, mouth_session]
         await asyncio.gather(*(s.connect() for s in self.sessions))
         self.world.voice = router
