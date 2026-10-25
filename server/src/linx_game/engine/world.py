@@ -412,7 +412,7 @@ class World:
         return f"({pos[0]}, {pos[1]})"
 
     def visible_characters(self, cid: str) -> list[Character]:
-        """该角色能看见的其他角色：同一房间（站在门口时为相邻房间），以及透过虚掩的门看到的房间。"""
+        """该角色能看见的其他角色：同一开敞区域（站在门口时为门两侧），以及透过虚掩的门看到的房间。"""
         c = self.characters[cid]
         return [o for o in self.characters.values() if o is not c and self._sees(c.pos, o.pos)]
 
@@ -452,10 +452,10 @@ class World:
         return self.grid.walkable(pos, c.id, c.player)
 
     def _seen_rooms(self, pos: Pos) -> set[str]:
+        """站在 pos 不借助虚掩的门能看见的房间：所在的开敞区域；站在门口时为门两侧的区域。"""
         room = self.grid.room_at(pos)
-        if room:
-            return {room}
-        return set(self.grid.door_rooms(pos)) if self.grid.is_door(pos) else set()
+        rooms = [room] if room else self.grid.door_rooms(pos) if self.grid.is_door(pos) else []
+        return set().union(*(self.grid.areas[r] for r in rooms))
 
     def _view(self, pos: Pos) -> set[str]:
         """站在 pos 能看见的房间：所在房间，加上相邻虚掩门另一侧的房间。"""
@@ -465,7 +465,7 @@ class World:
             cell = self.grid.cell(door)
             if cell and cell.kind == "door" and cell.see_through_when is not None \
                     and flags_match(cell.see_through_when, self.flags):
-                rooms = rooms | set(self.grid.door_rooms(door))
+                rooms = rooms | self._seen_rooms(door)
         return rooms
 
     def _sees(self, observer: Pos, target: Pos) -> bool:
