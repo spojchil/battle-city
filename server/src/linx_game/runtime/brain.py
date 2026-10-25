@@ -15,7 +15,10 @@ from linx_game.runtime.session import LinxSession
 log = logging.getLogger("linx_game.brain")
 
 # 没有新感知时，最长隔多久再给角色一次思考机会（秒）
-IDLE_S = 20
+IDLE_S = 30
+# 被唤醒后等待感知平静下来再思考：一段话按句到达，等对方说完再一并处理（秒）
+SETTLE_S = 1.5
+SETTLE_MAX_S = 6
 # 等待一轮结束的上限（秒），超时后继续下一轮
 TURN_TIMEOUT_S = 40
 # 保留的历史消息条数（不含系统提示词与示例）
@@ -29,6 +32,12 @@ PROMPT = """你在操控一场实时语音推理游戏中的角色「{name}」�
 - 世界按真实时间流动，不会等你。你每次收到的是角色此刻的感知。一次可以调用零到多个工具；暂时不需要行动时，只写想法、不调用工具。
 - 说话像真人对话：口语、简短，一次一两句。只有附近的人听得到你，离得远的人听不到或听不清。
 - 你只知道角色背景和感知中出现的信息，不要编造没有感知到的事。
+- 任务书里的安排有先后条件，前提还没有发生（例如还没有人告诉你某件事），就不要提前去做。
+- 没有新情况时保持现状，不要为了行动而行动；等待时不要来回走动，也不要重复说过的话。
+- move_to 的目标只能是下面列出的地点、感知中出现的人或可交互的东西。
+
+## 地图上的地点
+{places}
 
 ## 角色背景
 {card}
@@ -57,7 +66,9 @@ class Brain:
         self._wake = asyncio.Event()
         self._turn_done = asyncio.Event()
         char = next(c for c in world.scenario.characters if c.id == cid)
-        self.system = PROMPT.format(name=char.name, role=char.role, card=char.card.strip(), task=char.task.strip())
+        places = "、".join(room.name for room in world.scenario.rooms.values())
+        self.system = PROMPT.format(name=char.name, role=char.role, places=places,
+                                    card=char.card.strip(), task=char.task.strip())
 
     # 网关回调（llm_gateway.Controller）
     def build(self, messages: list[dict]) -> list[dict]:
@@ -80,13 +91,26 @@ class Brain:
     def wake(self) -> None:
         self._wake.set()
 
+    async def _settle(self) -> None:
+        """唤醒后直到 SETTLE_S 内没有新的唤醒（最长 SETTLE_MAX_S）再继续。"""
+        deadline = asyncio.get_running_loop().time() + SETTLE_MAX_S
+        while True:
+            self._wake.clear()
+            left = deadline - asyncio.get_running_loop().time()
+            if left <= 0:
+                return
+            try:
+                await asyncio.wait_for(self._wake.wait(), timeout=min(SETTLE_S, left))
+            except TimeoutError:
+                return
+
     async def run(self) -> None:
         while True:
             try:
                 await asyncio.wait_for(self._wake.wait(), timeout=IDLE_S)
             except TimeoutError:
                 pass
-            self._wake.clear()
+            await self._settle()
             text = perception.render(self.world, self.cid, self.world.drain(self.cid))
             self._turn_done.clear()
             log.info("perceive %s:\n%s", self.cid, text)

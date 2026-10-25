@@ -3,6 +3,7 @@
 角色只能通过这些工具影响世界。工具只表达意图，由世界裁决并立即返回结果；
 移动、交互、说话都需要时间，进展与结果以感知的形式在后续轮次送达。
 调用方由灵矽注入的 X-Linx-Device-Id 识别，对应某个角色的 brain 连接。
+工具均为异步函数，在事件循环中执行，以便世界状态只在同一线程中修改。
 """
 
 import logging
@@ -41,27 +42,27 @@ def _act(ctx: Context, name: str, **args) -> str:
 @mcp.tool(description="说一句话。这是发出声音的唯一方式，不调用就没有人听见。说话需要时间，"
                       "期间可以继续行动；新的 say 会打断你还没说完的话。只有附近的人能听到，"
                       "距离越远越听不清。volume：耳语、正常、大喊。")
-def say(ctx: Context, text: str, volume: Literal["耳语", "正常", "大喊"] = "正常") -> str:
+async def say(ctx: Context, text: str, volume: Literal["耳语", "正常", "大喊"] = "正常") -> str:
     return _act(ctx, "say", text=text, volume=volume)
 
 
 @mcp.tool(description="立即停止你正在说的话，例如不该听到的人走近时。已经说出口的部分无法收回。")
-def stop_speaking(ctx: Context) -> str:
+async def stop_speaking(ctx: Context) -> str:
     return _act(ctx, "stop_speaking")
 
 
 @mcp.tool(description="走向某个地点、某个人或某个可交互点。target 使用感知中出现的名称。"
                       "移动需要时间，途中可以继续说话；到达后会收到新的感知。")
-def move_to(ctx: Context, target: str) -> str:
+async def move_to(ctx: Context, target: str) -> str:
     return _act(ctx, "move_to", target=target)
 
 
-@mcp.tool(description="对身边一格内的可交互点执行一个行动。target 为可交互点名称，action 为感知中列出的行动名称。"
+@mcp.tool(description="对某个可交互点执行一个行动，不在身边时会先走过去。target 为可交互点名称，action 为感知中列出的行动名称。"
                       "行动持续一段时间，完成后会收到结果；移动或 stop 会中断行动。")
-def interact(ctx: Context, target: str, action: str) -> str:
+async def interact(ctx: Context, target: str, action: str) -> str:
     return _act(ctx, "interact", target=target, action=action)
 
 
 @mcp.tool(description="停下：停止移动或正在进行的行动。")
-def stop(ctx: Context) -> str:
+async def stop(ctx: Context) -> str:
     return _act(ctx, "stop")
