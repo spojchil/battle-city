@@ -72,10 +72,12 @@ interactables:
   - id: toilet
     name: 男卫马桶
     pos: [10, 13]
-    flags: {toilet: broken}
+    flags: {toilet: broken, tank_lid: closed}
     describe:
       - when: {}
         text: 男卫隔间里有一个马桶。马桶后面的墙上有一个带把手的小阀门，接着通往水箱的进水软管。
+      - when: {toilet: broken, tank_lid: open}
+        text: 水箱盖被掀开搁在一边，水箱里没有水，连着浮球的塑料杆停在最高处；墙上小阀门的把手与进水软管方向一致。
       - when: {toilet: ok}
         text: 马桶水箱里有进水的声音。
     actions:
@@ -92,6 +94,7 @@ interactables:
         duration_s: 8
         requires: {toilet: broken}
         on_complete:
+          set: {tank_lid: open}
           reveal: 水箱里没有水。水箱里一根连着浮球的塑料杆停在最高处，一动不动。马桶后面墙上那个小阀门的把手与进水软管方向一致。
       - id: fix
         label: 更换进水阀
