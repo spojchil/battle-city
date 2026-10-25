@@ -46,7 +46,8 @@ def _act(ctx: Context, name: str, **args) -> str:
 
 @mcp.tool(description="说一句话。这是发出声音的唯一方式，不调用就没有人听见。说话需要时间，"
                       "期间可以继续行动；新的 say 会打断你还没说完的话。只有附近的人能听到，"
-                      "距离越远越听不清。volume：耳语、正常、大喊。")
+                      "距离越远越听不清。对某人说完后，给对方留出回答的时间，不要接着说；"
+                      "别人正在交谈时不要插话，除非话是对你说的。volume：耳语、正常、大喊。")
 async def say(ctx: Context, text: str, volume: Literal["耳语", "正常", "大喊"] = "正常") -> str:
     return _act(ctx, "say", text=text, volume=volume)
 
