@@ -93,6 +93,7 @@ interactables:
         label: 拧开角阀
         seen_as: 在马桶后面拧阀门
         duration_s: 10
+        who: [player]             # 住客不会自己动手修；维修工使用 fix
         requires: {toilet: broken, valve: seen}
         on_complete:
           set: {toilet: ok}

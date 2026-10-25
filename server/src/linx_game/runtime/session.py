@@ -11,6 +11,7 @@ import logging
 from collections.abc import Callable
 
 import websockets
+from websockets.protocol import State
 
 from linx_game.devtools.vdevice import VirtualDevice
 
@@ -26,6 +27,7 @@ class LinxSession:
         self.on_audio: Callable[[bytes], None] = lambda pcm: None
         self._device: VirtualDevice | None = None
         self._reader: asyncio.Task | None = None
+        self._lock = asyncio.Lock()
 
     @property
     def mac(self) -> str:
@@ -56,7 +58,15 @@ class LinxSession:
         except Exception:
             log.exception("reader failed %s", self.name)
 
+    async def _ensure(self) -> None:
+        """发送前发现连接已断开（例如超过智能体的空闲超时）就重新连接。"""
+        async with self._lock:
+            if self._device is None or self._device.ws.state is not State.OPEN:
+                log.info("reconnecting %s", self.name)
+                await self.connect()
+
     async def send_json(self, payload: dict) -> None:
+        await self._ensure()
         await self._device._send_json(payload)
 
     async def send_text(self, text: str, text_response: str | None = None) -> None:
@@ -69,4 +79,5 @@ class LinxSession:
         await self.send_json({"type": "abort", "reason": "wake_word_detected"})
 
     async def send_audio(self, pcm: bytes) -> None:
+        await self._ensure()
         await self._device.ws.send(pcm)

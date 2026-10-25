@@ -26,6 +26,9 @@ STATE_PATH = Path(os.getenv("PROVISION_STATE", Path.home() / ".config" / "linx-g
 # 平台内置工具与游戏无关，且会干扰模型选择工具
 DISABLED_BUILTIN_TOOLS = ["get_time", "get_lunar", "handle_exit_intent"]
 
+# 平台默认约 120 秒无语音活动即断开连接；角色的发声连接常常长时间空闲，设为上限
+IDLE_TIMEOUT_S = 3600
+
 # 实际提示词由大模型网关按游戏状态生成，智能体上只保留说明
 AGENT_PROMPT = "你在操控游戏角色「{name}」（{role}）。完整设定与局势由游戏服务器提供。"
 
@@ -65,7 +68,10 @@ def ensure_agent(linx: Linx, state: dict, key: str, name: str, role: str, voice:
         state["agents"][key] = agent_id
         print(f"创建智能体 {key} -> {agent_id}")
     linx.call("PUT", f"/xiaozhi/agent/{agent_id}", json={
-        **config, "functions": [], "extra": {"disabled_builtin_tools": DISABLED_BUILTIN_TOOLS},
+        **config, "functions": [], "extra": {
+            "disabled_builtin_tools": DISABLED_BUILTIN_TOOLS,
+            "goodbye": {"idle_timeout_seconds": IDLE_TIMEOUT_S},
+        },
     })
     mcp_ids = [os.environ["LINX_MCP_ID"]] if mcp else []
     linx.call("PUT", f"/v1/agents/{agent_id}/mcps", json={"mcp_ids": mcp_ids})
