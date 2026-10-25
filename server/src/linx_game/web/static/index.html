@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>语音推理游戏</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header id="topbar">
+    <div class="brand">
+      <span id="scenario-title">连接中…</span>
+      <span id="conn-status" class="conn" title="连接状态"></span>
+    </div>
+    <div class="clock-group">
+      <div class="clock-item">
+        <span class="clock-label">游戏时间</span>
+        <span id="clock" class="clock-value">--:--:--</span>
+      </div>
+      <div class="clock-item">
+        <span class="clock-label">剩余</span>
+        <span id="remaining" class="clock-value">--:--</span>
+      </div>
+    </div>
+    <div class="top-actions">
+      <button id="photo-btn" class="btn" type="button" disabled>拍照 <kbd>P</kbd></button>
+      <button id="submit-btn" class="btn btn-primary" type="button" disabled>提交证据</button>
+    </div>
+  </header>
+
+  <main id="layout">
+    <section id="stage-column">
+      <div id="stage">
+        <canvas id="map"></canvas>
+        <div id="nearby" class="nearby hidden"></div>
+      </div>
+      <div id="subtitles" aria-live="polite"></div>
+      <div id="controls">
+        <div id="mic-indicator" class="mic">
+          <span class="mic-dot"></span>
+          <span id="mic-text">按住 <kbd>空格</kbd> 说话</span>
+        </div>
+        <form id="say-form" autocomplete="off">
+          <input id="say-input" type="text" maxlength="200" placeholder="或在此输入要说的话，回车发送" disabled>
+          <button id="say-btn" class="btn" type="submit" disabled>说</button>
+        </form>
+        <div class="hints">
+          <span><kbd>WASD</kbd>/<kbd>方向键</kbd> 移动</span>
+          <span>点击地图 前往</span>
+          <span><kbd>E</kbd> 交互</span>
+          <span><kbd>Esc</kbd> 停止</span>
+        </div>
+      </div>
+    </section>
+
+    <aside id="sidebar">
+      <section class="panel" id="recorder-panel">
+        <h2 class="panel-title">
+          <span class="rec-dot"></span>录音笔
+          <span id="recorder-time" class="panel-meta">REC 00:00</span>
+        </h2>
+        <ol id="recorder" class="recorder"></ol>
+      </section>
+      <section class="panel" id="album-panel">
+        <h2 class="panel-title">相册 <span id="album-count" class="panel-meta">0 张</span></h2>
+        <div id="album-warning" class="album-warning hidden">拍的照片过多，会影响整体照片的可信度</div>
+        <div id="album" class="album">
+          <p class="empty">还没有照片。按 <kbd>P</kbd> 用手机记录眼前的情况。</p>
+        </div>
+      </section>
+    </aside>
+  </main>
+
+  <div id="toasts"></div>
+
+  <div id="intro-overlay" class="overlay">
+    <div class="dialog intro">
+      <h1 id="intro-title">正在连接服务器…</h1>
+      <div id="intro-text" class="intro-text"></div>
+      <div class="intro-keys">
+        <span><kbd>WASD</kbd> 移动</span>
+        <span><kbd>空格</kbd> 按住说话</span>
+        <span><kbd>E</kbd> 交互</span>
+        <span><kbd>P</kbd> 拍照</span>
+      </div>
+      <button id="start-btn" class="btn btn-primary btn-large" type="button" disabled>开始</button>
+    </div>
+  </div>
+
+  <div id="confirm-overlay" class="overlay hidden">
+    <div class="dialog confirm">
+      <h2>提交证据</h2>
+      <p>提交后本局立即结束，警方将根据你的录音与照片进行评判。确定提交吗？</p>
+      <div class="dialog-actions">
+        <button id="confirm-cancel" class="btn" type="button">再想想</button>
+        <button id="confirm-ok" class="btn btn-primary" type="button">确定提交</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="ended-overlay" class="overlay hidden">
+    <div class="dialog ended">
+      <div id="ended-reason" class="ended-reason"></div>
+      <h1 id="ended-title"></h1>
+      <p id="ended-summary" class="ended-summary"></p>
+      <ul id="ended-points" class="ended-points"></ul>
+      <button id="reload-btn" class="btn" type="button">再来一局</button>
+    </div>
+  </div>
+
+  <script src="audio.js"></script>
+  <script src="game.js"></script>
+</body>
+</html>
