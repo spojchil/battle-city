@@ -130,7 +130,7 @@ class Game:
 
     async def _push_state(self) -> None:
         while True:
-            snapshot = self.world.snapshot()
+            snapshot = self.world.snapshot(self.player)
             snapshot["remaining_s"] = max(0, round(self.scenario.duration_s - self.world.now()))
             await self.send({"type": "state", **snapshot})
             await asyncio.sleep(1 / STATE_HZ)

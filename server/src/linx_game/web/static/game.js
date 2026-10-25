@@ -6,8 +6,6 @@
  */
 "use strict";
 
-/** true：显示所有场内角色；false：只显示与玩家同房间的角色。 */
-const SHOW_ALL_CHARACTERS = true;
 const STEP_INTERVAL_MS = 120;
 const INTERACT_RANGE = 1; // 切比雪夫距离
 const PHOTO_WARN_THRESHOLD = 5;
@@ -301,10 +299,8 @@ function onState(msg) {
   const player = (msg.characters || []).find((c) => c.id === game.playerId);
   const seen = new Set();
   for (const c of msg.characters || []) {
+    // 服务端只下发玩家此刻能看见的角色
     if (c.offstage || !Array.isArray(c.pos)) continue;
-    if (!SHOW_ALL_CHARACTERS && c.id !== game.playerId) {
-      if (!player || !player.room || c.room !== player.room) continue;
-    }
     seen.add(c.id);
     let entry = game.chars.get(c.id);
     if (!entry) {

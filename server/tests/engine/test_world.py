@@ -377,6 +377,20 @@ def test_photo(h):
     assert len(w.photos["player"]) == 2
 
 
+def test_snapshot_for_viewer(h):
+    w = h.world
+    h.place("player", 5, 3)                    # 紧挨通往办公室的门 (5, 4)
+    view = lambda: w.snapshot("player")
+    ids = {c["id"] for c in view()["characters"]}
+    assert "player" in ids and "guard" not in ids
+    assert "flags" not in view()
+    assert "drawer" not in {it["id"] for it in view()["interactables"]}
+
+    w.flags["office_door"] = "ajar"
+    assert "guard" in {c["id"] for c in view()["characters"]}
+    assert "drawer" in {it["id"] for it in view()["interactables"]}
+
+
 def test_snapshot_and_events(h):
     w = h.world
     w.say("guest", "嗯。")

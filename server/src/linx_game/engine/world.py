@@ -371,20 +371,31 @@ class World:
         out, c.inbox = c.inbox, []
         return out
 
-    def snapshot(self) -> dict:
-        """网页 state 消息的内容。"""
+    def snapshot(self, viewer: str | None = None) -> dict:
+        """网页 state 消息的内容。
+
+        给定 viewer 时只含该角色此刻能看见的人和物，不含剧情标志，与 AI 角色的感知规则一致；
+        不给定时为全局状态，仅供测试与调试。
+        """
         t = self.now()
-        return {
+        if viewer is None:
+            chars, items = list(self.characters.values()), self.scenario.interactables
+        else:
+            chars = [self.characters[viewer], *self.visible_characters(viewer)]
+            items = self.visible_interactables(viewer)
+        snap = {
             "type": "state", "t": round(t, 2), "clock": self.clock_text(t),
             "remaining_s": round(max(0.0, self.scenario.duration_s - t), 2),
             "characters": [{
                 "id": c.id, "name": c.name, "role": c.role, "pos": list(c.pos),
                 "room": self.grid.room_at(c.pos), "player": c.player, "activity": self.activity(c),
                 "speaking": c.speech is not None, "offstage": self.grid.is_offstage(c.pos),
-            } for c in self.characters.values()],
-            "interactables": [{"id": it.id, "describe": self.describe(it)} for it in self.scenario.interactables],
-            "flags": dict(self.flags),
+            } for c in chars],
+            "interactables": [{"id": it.id, "describe": self.describe(it)} for it in items],
         }
+        if viewer is None:
+            snap["flags"] = dict(self.flags)
+        return snap
 
     def subscribe(self, callback: Callable[[Event], None]) -> None:
         self._subscribers.append(callback)
