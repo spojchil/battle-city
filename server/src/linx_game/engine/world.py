@@ -15,8 +15,8 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Protocol
 
-from .grid import Grid, chebyshev, direction
-from .perception import Percept
+from .grid import DIRS, Grid, chebyshev, direction
+from .perception import THROUGH_DOOR_NOTE, Percept
 from .scenario import Action, CharacterSpec, Interactable, Pos, Scenario
 from .sound import CLEAR, VOLUMES
 from .sound import audibility as sound_level
@@ -334,17 +334,21 @@ class World:
         """记录此刻感知到的场景，存入 photos[cid]。"""
         c = self.characters[cid]
         people = [{"id": o.id, "name": o.name, "role": o.role, "activity": self.activity(o),
-                   "speaking": o.speech is not None} for o in self.visible_characters(cid)]
-        objects = [{"id": it.id, "name": it.name, "describe": self.describe(it)}
+                   "speaking": o.speech is not None, "through_door": self.through_door(cid, o.pos)}
+                  for o in self.visible_characters(cid)]
+        objects = [{"id": it.id, "name": it.name, "describe": self.describe(it),
+                    "through_door": self.through_door(cid, it.pos)}
                    for it in self.visible_interactables(cid)]
         place = self.place_name(c.pos)
         lines = [f"{self.clock_text()} 摄于{place}"]
         for p in people:
             doing = "，".join(filter(None, [p["activity"], "正在说话" if p["speaking"] else ""]))
-            lines.append(f"{p['name']}（{p['role']}）" + (f"：{doing}" if doing else ""))
+            lines.append(f"{p['name']}（{p['role']}）" + (f"：{doing}" if doing else "")
+                         + (THROUGH_DOOR_NOTE if p["through_door"] else ""))
         for o in objects:
             if o["describe"]:
-                lines.append(f"{o['name']}：{'；'.join(o['describe'])}")
+                lines.append(f"{o['name']}：{'；'.join(o['describe'])}"
+                             + (THROUGH_DOOR_NOTE if o["through_door"] else ""))
         photos = self.photos.setdefault(cid, [])
         scene = {"index": len(photos), "t": round(self.now(), 2), "clock": self.clock_text(), "place": place,
                  "pos": list(c.pos), "people": people, "objects": objects, "text": "\n".join(lines)}
@@ -387,13 +391,17 @@ class World:
         return f"({pos[0]}, {pos[1]})"
 
     def visible_characters(self, cid: str) -> list[Character]:
-        """与该角色处在同一房间（站在门口时为相邻房间）的其他角色。"""
+        """该角色能看见的其他角色：同一房间（站在门口时为相邻房间），以及透过虚掩的门看到的房间。"""
         c = self.characters[cid]
         return [o for o in self.characters.values() if o is not c and self._sees(c.pos, o.pos)]
 
     def visible_interactables(self, cid: str) -> list[Interactable]:
-        rooms = self._seen_rooms(self.characters[cid].pos)
+        rooms = self._view(self.characters[cid].pos)
         return [it for it in self.scenario.interactables if it.room in rooms]
+
+    def through_door(self, cid: str, pos: Pos) -> bool:
+        """该角色是否只是透过虚掩的门才看见 pos 处的人或物。"""
+        return not (self._seen_rooms(self.characters[cid].pos) & self._seen_rooms(pos))
 
     def activity(self, c: Character) -> str:
         """别人看到的该角色在做什么。"""
@@ -428,8 +436,20 @@ class World:
             return {room}
         return set(self.grid.door_rooms(pos)) if self.grid.is_door(pos) else set()
 
-    def _sees(self, a: Pos, b: Pos) -> bool:
-        return bool(self._seen_rooms(a) & self._seen_rooms(b))
+    def _view(self, pos: Pos) -> set[str]:
+        """站在 pos 能看见的房间：所在房间，加上相邻虚掩门另一侧的房间。"""
+        rooms = self._seen_rooms(pos)
+        for dx, dy in DIRS:
+            door = (pos[0] + dx, pos[1] + dy)
+            cell = self.grid.cell(door)
+            if cell and cell.kind == "door" and cell.see_through_when is not None \
+                    and flags_match(cell.see_through_when, self.flags):
+                rooms = rooms | set(self.grid.door_rooms(door))
+        return rooms
+
+    def _sees(self, observer: Pos, target: Pos) -> bool:
+        """站在 observer 的角色能否看见 target 处的角色。虚掩的门只让门边的人看见另一侧，不对称。"""
+        return bool(self._view(observer) & self._seen_rooms(target))
 
     def _resolve_place(self, c: Character, target: str) -> tuple[str, Callable[[Pos], bool]] | None:
         """按 房间 → 角色 → 可交互点 的顺序解析目的地，返回 (描述, 目标格判定)。"""
@@ -506,14 +526,14 @@ class World:
 
     def _move(self, c: Character, nxt: Pos) -> None:
         old = c.pos
-        seen_before = {o.id for o in self.characters.values() if o is not c and self._sees(old, o.pos)}
+        seen_before = {o.id for o in self.characters.values() if o is not c and self._sees(o.pos, old)}
         c.pos = nxt
         c.last_step_t = self.now()
         self._emit("moved", cid=c.id, pos=list(nxt), room=self.grid.room_at(nxt))
         for o in self.characters.values():
             if o is c:
                 continue
-            was, now = o.id in seen_before, self._sees(nxt, o.pos)
+            was, now = o.id in seen_before, self._sees(o.pos, nxt)
             if was != now:
                 # 视野变化先暂存，确认期内又变回原状时成对抵消
                 key = (o.id, c.id)

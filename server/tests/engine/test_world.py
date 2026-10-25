@@ -369,7 +369,7 @@ def test_photo(h):
     scene = w.photo("player")
     assert scene["index"] == 0 and scene["place"] == "储藏间" and scene["clock"] == "14:00:00"
     assert scene["people"] == [{"id": "worker", "name": "老李", "role": "工人",
-                                "activity": "在撬保险柜", "speaking": True}]
+                                "activity": "在撬保险柜", "speaking": True, "through_door": False}]
     assert "老李（工人）：在撬保险柜，正在说话" in scene["text"]
     h.advance(21)
     scene = w.photo("player")
