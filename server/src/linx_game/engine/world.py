@@ -138,6 +138,7 @@ class World:
         self.progress: dict[tuple[str, str], float] = {}   # cumulative 行动被打断后保留的进度
         self.recordings: dict[str, list[Percept]] = {c.id: [] for c in scenario.characters if c.player}
         self.photos: dict[str, list[dict]] = {}
+        self.live_speaking: set[str] = set()   # 正在用麦克风说话的玩家（尚未识别成文字）
         self.voice: VoiceBackend | None = None
         self._subscribers: list[Callable[[Event], None]] = []
         self._speech_ids = itertools.count(1)
@@ -306,6 +307,12 @@ class World:
         else:
             self.voice.start(sp)
         return sp
+
+    def speaking_nearby(self, cid: str) -> list[Character]:
+        """此刻正在说话、且 cid 能听清的其他角色，包括正按着麦克风说话的玩家。"""
+        return [o for o in self.characters.values()
+                if o.id != cid and (o.speech or o.id in self.live_speaking)
+                and self.audibility(o.id, cid)[0] == CLEAR]
 
     def stop_speaking(self, cid: str) -> str:
         c = self.characters[cid]

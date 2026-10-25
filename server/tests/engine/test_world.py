@@ -380,6 +380,21 @@ def test_photo(h):
     assert len(w.photos["player"]) == 2
 
 
+def test_speaking_nearby(h):
+    w = h.world
+    h.place("player", 3, 2)
+    h.place("guest", 4, 2)
+    h.place("guard", 3, 6)                     # 隔墙的办公室
+    assert w.speaking_nearby("player") == []
+    w.say("guest", "这句话要说得久一点才行。")
+    w.say("guard", "办公室里也有人在说话。")
+    assert [c.id for c in w.speaking_nearby("player")] == ["guest"]
+    h.advance(30)
+    assert w.speaking_nearby("player") == []
+    w.live_speaking.add("player")              # 玩家按住麦克风说话
+    assert [c.id for c in w.speaking_nearby("guest")] == ["player"]
+
+
 def test_snapshot_for_viewer(h):
     w = h.world
     h.place("player", 5, 3)                    # 紧挨通往办公室的门 (5, 4)

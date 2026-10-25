@@ -6,6 +6,7 @@
 工具均为异步函数，在事件循环中执行，以便世界状态只在同一线程中修改。
 """
 
+import asyncio
 import logging
 from typing import TYPE_CHECKING, Literal
 
@@ -23,6 +24,11 @@ mcp = MCPServer("linx-game")
 # 设备 MAC（大写）→ (世界, 角色 id, 思考循环)，由运行时在开局时登记；
 # 工具执行结果交给角色的思考循环，写入其记忆
 actors: dict[str, tuple[World, str, "Brain"]] = {}
+
+# 附近有人正在说话时，新的 say 等对方说完再开口，最长等待（秒）
+TURN_WAIT_MAX_S = 10
+# 角色 id → 等待开口的发言
+_queued: dict[str, asyncio.Task] = {}
 
 
 def _actor(ctx: Context) -> tuple[World, str, "Brain"] | None:
@@ -44,16 +50,52 @@ def _act(ctx: Context, name: str, **args) -> str:
     return result
 
 
+def _cancel_queued(cid: str) -> bool:
+    task = _queued.pop(cid, None)
+    if task is None:
+        return False
+    task.cancel()
+    return True
+
+
+async def _say_when_free(actor: tuple[World, str, "Brain"], device: str, text: str, volume: str) -> None:
+    world, cid, _ = actor
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + TURN_WAIT_MAX_S
+    while world.speaking_nearby(cid) and loop.time() < deadline:
+        await asyncio.sleep(0.1)
+    _queued.pop(cid, None)
+    if actors.get(device) is actor:          # 等待期间游戏可能已经结束
+        world.say(cid, text, volume)
+
+
 @mcp.tool(description="说一句话。这是发出声音的唯一方式，不调用就没有人听见。说话需要时间，"
-                      "期间可以继续行动；新的 say 会打断你还没说完的话。只有附近的人能听到，"
-                      "距离越远越听不清。对某人说完后，给对方留出回答的时间，不要接着说；"
+                      "期间可以继续行动；新的 say 会打断你还没说完的话。附近有人正在说话时，会等对方说完再开口。"
+                      "只有附近的人能听到，距离越远越听不清。对某人说完后，给对方留出回答的时间，不要接着说；"
                       "别人正在交谈时不要插话，除非话是对你说的。volume：耳语、正常、大喊。")
 async def say(ctx: Context, text: str, volume: Literal["耳语", "正常", "大喊"] = "正常") -> str:
-    return _act(ctx, "say", text=text, volume=volume)
+    actor = _actor(ctx)
+    if actor is None:
+        return "当前没有进行中的游戏。"
+    world, cid, brain = actor
+    _cancel_queued(cid)
+    if not world.speaking_nearby(cid):
+        return _act(ctx, "say", text=text, volume=volume)
+    device = ctx.request_context.request.headers.get("x-linx-device-id", "").upper()
+    _queued[cid] = asyncio.create_task(_say_when_free(actor, device, text, volume))
+    result = "旁边有人正在说话，等对方说完你就开口。"
+    brain.record_result(result)
+    log.info("tool %s say (queued) %s", cid, text)
+    return result
 
 
 @mcp.tool(description="立即停止你正在说的话，例如不该听到的人走近时。已经说出口的部分无法收回。")
 async def stop_speaking(ctx: Context) -> str:
+    actor = _actor(ctx)
+    if actor is not None and _cancel_queued(actor[1]) and not actor[0].characters[actor[1]].speech:
+        result = "你把要说的话咽了回去。"
+        actor[2].record_result(result)
+        return result
     return _act(ctx, "stop_speaking")
 
 

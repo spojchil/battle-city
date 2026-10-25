@@ -190,8 +190,11 @@ class Game:
             world.player_said(me, msg["text"])
         elif kind == "submit":
             asyncio.create_task(self.end("submitted"))
-        elif kind == "mic" and self.ear is not None:
-            await (self.ear.start() if msg.get("state") == "start" else self.ear.stop())
+        elif kind == "mic":
+            # 玩家按住说话期间，附近的 AI 角色不会开口
+            (world.live_speaking.add if msg.get("state") == "start" else world.live_speaking.discard)(me)
+            if self.ear is not None:
+                await (self.ear.start() if msg.get("state") == "start" else self.ear.stop())
 
     async def handle_audio(self, pcm: bytes) -> None:
         if self.ear is not None:

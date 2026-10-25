@@ -21,6 +21,8 @@ IDLE_S = 60
 # 被唤醒后等待感知平静下来再思考：一段话按句到达，等对方说完再一并处理（秒）
 SETTLE_S = 1.5
 SETTLE_MAX_S = 6
+# 附近有人还在说话时先听完再思考，最长等待（秒）
+HEAR_OUT_MAX_S = 12
 # 等待一轮结束的上限（秒），超时后继续下一轮
 TURN_TIMEOUT_S = 40
 # 保留的历史消息条数（不含系统提示词与示例）
@@ -135,6 +137,13 @@ class Brain:
             except TimeoutError:
                 return
 
+    async def _hear_out(self) -> None:
+        """附近有人还在说话（声音能听清）时，等对方说完再思考，避免抢话。"""
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + HEAR_OUT_MAX_S
+        while self.world.speaking_nearby(self.cid) and loop.time() < deadline:
+            await asyncio.sleep(0.2)
+
     async def run(self) -> None:
         while True:
             try:
@@ -142,6 +151,7 @@ class Brain:
             except TimeoutError:
                 pass
             await self._settle()
+            await self._hear_out()
             text = perception.render(self.world, self.cid, self.world.drain(self.cid))
             self._turn_done.clear()
             self._flush_results()
