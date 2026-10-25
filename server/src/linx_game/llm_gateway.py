@@ -112,6 +112,27 @@ def start_review(body: dict) -> None:
     task.add_done_callback(_review_tasks.discard)
 
 
+# 上游推理服务有频率限制：限制同时进行的请求数，并对 429 按退避重试
+_upstream_slots = asyncio.Semaphore(int(os.getenv("LLM_GATEWAY_CONCURRENCY", "3")))
+RETRY_DELAYS_S = (1, 2, 4, 8)
+
+
+async def _send_with_retry(client: httpx.AsyncClient, body: dict) -> httpx.Response:
+    for delay in (*RETRY_DELAYS_S, None):
+        upstream = await client.send(
+            client.build_request(
+                "POST", "/chat/completions", json=body,
+                headers={"Authorization": f"Bearer {os.environ['QINIU_AI_API_KEY']}"},
+            ),
+            stream=True,
+        )
+        if upstream.status_code != 429 or delay is None:
+            return upstream
+        await upstream.aclose()
+        log.warning("upstream 429, retry in %ss", delay)
+        await asyncio.sleep(delay)
+
+
 async def chat_completions(request: Request) -> Response:
     token = os.getenv("LLM_GATEWAY_TOKEN")
     if not token or request.headers.get("authorization") != f"Bearer {token}":
@@ -151,13 +172,13 @@ async def chat_completions(request: Request) -> Response:
     start_review(body)
 
     client = httpx.AsyncClient(base_url=os.environ["QINIU_AI_BASE_URL"], timeout=120)
-    upstream = await client.send(
-        client.build_request(
-            "POST", "/chat/completions", json=body,
-            headers={"Authorization": f"Bearer {os.environ['QINIU_AI_API_KEY']}"},
-        ),
-        stream=True,
-    )
+    await _upstream_slots.acquire()
+    try:
+        upstream = await _send_with_retry(client, body)
+    except BaseException:
+        _upstream_slots.release()
+        await client.aclose()
+        raise
 
     async def relay():
         buffer = b""
@@ -174,6 +195,7 @@ async def chat_completions(request: Request) -> Response:
                 if b'"tool_calls"' not in buffer:
                     controller.on_turn_done()
         finally:
+            _upstream_slots.release()
             await upstream.aclose()
             await client.aclose()
             log.info("reply device=%s %s", device, json.dumps(_reply_text(buffer), ensure_ascii=False))
