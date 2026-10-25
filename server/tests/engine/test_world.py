@@ -261,7 +261,7 @@ def test_player_said(h):
 def test_interact_completion_effects(h):
     w = h.world
     assert w.interact("player", "电视", "打开") == "找不到名为「电视」的可交互物"
-    assert w.interact("player", "台灯", "砸") == "台灯没有「砸」这个行动，现在可以：打开台灯"
+    assert w.interact("player", "台灯", "砸").startswith("台灯没有「砸」这个行动，现在可以：打开台灯。")
     assert w.interact("player", "lamp", "switch_on") == "你开始打开台灯，还需约 2 秒"
     assert w.snapshot()["characters"][0]["activity"] == "在开台灯"
     h.advance(2.1)

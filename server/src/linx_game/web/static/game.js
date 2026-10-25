@@ -650,6 +650,8 @@ async function start() {
   if (game.started || !game.scenario) return;
   game.started = true;
   el.introOverlay.classList.add("hidden");
+  // 玩家读完背景介绍后，服务端才开始计时
+  send({ type: "start" });
   const Ctx = window.AudioContext || window.webkitAudioContext;
   try {
     game.audioCtx = new Ctx({ latencyHint: "interactive" });

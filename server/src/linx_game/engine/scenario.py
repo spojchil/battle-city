@@ -92,6 +92,15 @@ class CharacterSpec:
 
 
 @dataclass(frozen=True)
+class Cue:
+    """给某个角色的定时或条件提示，例如手机闹钟、日程提醒、来电。每条只触发一次。"""
+    to: str
+    text: str
+    at_s: float | None = None    # 开局后多少秒触发；None 表示不限时间
+    when: dict = field(default_factory=dict)   # 全局标志全部匹配时才触发
+
+
+@dataclass(frozen=True)
 class Scenario:
     id: str
     title: str
@@ -106,6 +115,7 @@ class Scenario:
     characters: tuple[CharacterSpec, ...]
     judge_truth: str = ""
     judge_criteria: str = ""
+    cues: tuple[Cue, ...] = ()
 
     @property
     def width(self) -> int:
@@ -190,11 +200,14 @@ def parse_scenario(data) -> Scenario:
     if duration <= 0:
         raise ValueError(f"duration_s: 应为正数，实际为 {duration!r}")
     judge = _get(data, "judge", "", dict, {})
+    start_clock_s = int(m[1]) * 3600 + int(m[2]) * 60 + int(m[3] or 0)
+    cues = [_parse_cue(c, f"cues[{i}]", known, start_clock_s)
+            for i, c in enumerate(_get(data, "cues", "", list, []))]
 
     return Scenario(
         id=str(_get(data, "id", "", str)), title=_get(data, "title", "", str),
         intro=_get(data, "intro", "", str, ""), duration_s=duration, start_clock=start_clock,
-        start_clock_s=int(m[1]) * 3600 + int(m[2]) * 60 + int(m[3] or 0),
+        start_clock_s=start_clock_s, cues=tuple(cues),
         legend=legend, rows=rows, rooms=rooms,
         interactables=tuple(interactables), characters=tuple(characters),
         judge_truth=_get(judge, "truth", "judge", str, ""),
@@ -316,6 +329,24 @@ def _type_name(typ) -> str:
     if isinstance(typ, tuple):
         return "数字"
     return _TYPE_NAMES.get(typ, typ.__name__)
+
+
+def _parse_cue(c, where: str, known: set[str], start_clock_s: int) -> Cue:
+    c = _as(c, where, dict)
+    to = _get(c, "to", where, str)
+    if to not in known:
+        raise ValueError(f"{where}.to: 未知角色 {to!r}")
+    at = c.get("at")
+    at_s = None
+    if at is not None:
+        m = re.fullmatch(r"(\d{1,2}):(\d{2})(?::(\d{2}))?", str(at))
+        if not m:
+            raise ValueError(f"{where}.at: 应为 HH:MM 或 HH:MM:SS，实际为 {at!r}")
+        at_s = (int(m[1]) * 3600 + int(m[2]) * 60 + int(m[3] or 0) - start_clock_s) % 86400
+    when = {str(k): v for k, v in _get(c, "when", where, dict, {}).items()}
+    if at_s is None and not when:
+        raise ValueError(f"{where}: at 与 when 至少需要一个")
+    return Cue(to=to, text=_get(c, "text", where, str), at_s=at_s, when=when)
 
 
 def _as(value, where: str, typ):
