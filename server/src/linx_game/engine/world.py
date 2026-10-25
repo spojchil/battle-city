@@ -240,7 +240,8 @@ class World:
         act = _match(action, [(a.id, a.label, a) for a in it.actions])
         if act is None:
             options = "、".join(a.label for a in it.actions if self.can_do(cid, a))
-            return f"{it.name}没有「{action}」这个行动" + (f"，现在可以：{options}" if options else "")
+            return (f"{it.name}没有「{action}」这个行动" + (f"，现在可以：{options}" if options else "")
+                    + "。要去某个地方或进入某个房间，请用 move_to")
         if act.who is not None and cid not in act.who:
             return f"你不能{act.label}"
         if not flags_match(act.requires, self.flags):
@@ -356,7 +357,7 @@ class World:
                          + (THROUGH_DOOR_NOTE if p["through_door"] else ""))
         for o in objects:
             if o["describe"]:
-                lines.append(f"{o['name']}：{'；'.join(o['describe'])}"
+                lines.append(f"{o['name']}：{join_describe(o['describe'])}"
                              + (THROUGH_DOOR_NOTE if o["through_door"] else ""))
         photos = self.photos.setdefault(cid, [])
         scene = {"index": len(photos), "t": round(self.now(), 2), "clock": self.clock_text(), "place": place,
