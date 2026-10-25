@@ -8,6 +8,8 @@ from .grid import chebyshev
 if TYPE_CHECKING:
     from .world import World
 
+THROUGH_DOOR_NOTE = "（透过虚掩的门看到）"
+
 
 @dataclass
 class Percept:
@@ -27,13 +29,17 @@ def render(world: "World", cid: str, percepts: list[Percept]) -> str:
     lines.append("【在场的人】" if others else "【在场的人】除你之外没有别人。")
     for o in others:
         doing = "，".join(filter(None, [world.activity(o), "正在说话" if o.speech else ""]))
-        lines.append(f"- {o.name}（{o.role}）" + (f"：{doing}" if doing else ""))
+        note = THROUGH_DOOR_NOTE if world.through_door(cid, o.pos) else ""
+        lines.append(f"- {o.name}（{o.role}）" + (f"：{doing}" if doing else "") + note)
 
     objects = world.visible_interactables(cid)
     if objects:
         lines.append("【可交互的东西】")
     for it in objects:
         desc = "；".join(world.describe(it))
+        if world.through_door(cid, it.pos):    # 隔着门只能看，不列出行动
+            lines.append(f"- {it.name}（{it.id}）" + (f"：{desc}" if desc else "") + THROUGH_DOOR_NOTE)
+            continue
         far = chebyshev(c.pos, it.pos) > 1
         lines.append(f"- {it.name}（{it.id}）" + (f"：{desc}" if desc else "") + ("（离你较远，需走近）" if far else ""))
         for a in it.actions:

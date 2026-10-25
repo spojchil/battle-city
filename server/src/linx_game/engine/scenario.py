@@ -25,6 +25,7 @@ class Cell:
     kind: str
     room: str | None = None
     allowed: tuple[str, ...] | None = None   # 门格：只有列出的角色能通过；None 表示不限
+    see_through_when: dict | None = None     # 门格：标志全部匹配时门虚掩，相邻格的角色能看见门另一侧
 
 
 @dataclass(frozen=True)
@@ -220,7 +221,12 @@ def _parse_map(m: dict, rooms: dict[str, Room]) -> tuple[dict[str, Cell], tuple[
         allowed = None
         if kind == "door" and "allowed" in spec:
             allowed = tuple(str(a) for a in _get(spec, "allowed", where, list))
-        legend[ch] = Cell(kind, room, allowed)
+        see_through = None
+        if spec.get("see_through_when") is not None:
+            if kind != "door":
+                raise ValueError(f"{where}.see_through_when: 只允许用于 door 格")
+            see_through = _get(spec, "see_through_when", where, dict)
+        legend[ch] = Cell(kind, room, allowed, see_through)
 
     text = _get(m, "grid", "map", str)
     rows = text.split("\n")
