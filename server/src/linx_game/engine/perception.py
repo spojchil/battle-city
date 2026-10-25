@@ -11,6 +11,15 @@ if TYPE_CHECKING:
 THROUGH_DOOR_NOTE = "（透过虚掩的门看到）"
 
 
+
+def join_describe(parts: list[str]) -> str:
+    """拼接多条状态描述：已以句末标点结尾的直接相连，否则以「；」分隔。"""
+    out = ""
+    for part in parts:
+        out += part if not out or out[-1] in "。！？；" else "；" + part
+    return out
+
+
 @dataclass
 class Percept:
     t: float          # 开局以来的秒数
@@ -36,7 +45,7 @@ def render(world: "World", cid: str, percepts: list[Percept]) -> str:
     if objects:
         lines.append("【可交互的东西】")
     for it in objects:
-        desc = "；".join(world.describe(it))
+        desc = join_describe(world.describe(it))
         if world.through_door(cid, it.pos):    # 隔着门只能看，不列出行动
             lines.append(f"- {it.name}（{it.id}）" + (f"：{desc}" if desc else "") + THROUGH_DOOR_NOTE)
             continue

@@ -52,3 +52,18 @@ def test_cue_waits_for_flags(mini_data):
 def test_cue_validation(mini_data, cue, message):
     with pytest.raises(ValueError, match=message):
         parse_scenario({**mini_data, "cues": [cue]})
+
+
+def test_exact_name_beats_partial_room_match(mini_data):
+    # 可交互点「休息区台灯」包含房间名「休息区」：应解析为可交互点而非房间
+    data = {**mini_data, "interactables": [dict(mini_data["interactables"][0], name="休息区台灯"),
+                                           *mini_data["interactables"][1:]]}
+    world, _ = _world(data, [])
+    assert "休息区台灯旁边" in world.move_to("player", "休息区台灯")
+
+
+def test_join_describe_punctuation():
+    from linx_game.engine.perception import join_describe
+
+    assert join_describe(["门锁着。", "门上有锁孔"]) == "门锁着。门上有锁孔"
+    assert join_describe(["灯亮着", "桌上有杯子。"]) == "灯亮着；桌上有杯子。"

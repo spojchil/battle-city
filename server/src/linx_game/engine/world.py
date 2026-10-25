@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from typing import Protocol
 
 from .grid import DIRS, Grid, chebyshev, direction
-from .perception import THROUGH_DOOR_NOTE, Percept
+from .perception import THROUGH_DOOR_NOTE, Percept, join_describe
 from .scenario import Action, CharacterSpec, Interactable, Pos, Scenario
 from .sound import CLEAR, VOLUMES
 from .sound import audibility as sound_level
@@ -461,21 +461,30 @@ class World:
         return bool(self._view(observer) & self._seen_rooms(target))
 
     def _resolve_place(self, c: Character, target: str) -> tuple[str, Callable[[Pos], bool]] | None:
-        """按 房间 → 角色 → 可交互点 的顺序解析目的地，返回 (描述, 目标格判定)。"""
+        """解析目的地，返回 (描述, 目标格判定)。
+
+        先在房间、角色、可交互点中找 id 或名称完全一致的，再按同样顺序做包含匹配，
+        避免「水井暗门」这类名称被房间「水井」抢先匹配。
+        """
         rooms = self.scenario.rooms
-        room = _match(target, [(r.id, r.name, r.id) for r in rooms.values()])
-        if room is not None:
-            return rooms[room].name, lambda p: self.grid.room_at(p) == room
-        others = [(o.id, o.name, o) for o in self.characters.values()
+        others = [o for o in self.characters.values()
                   if o is not c and (not self.grid.is_offstage(o.pos) or self._sees(c.pos, o.pos))]
-        other = _match(target, others)
-        if other is not None:
-            pos = other.pos
-            return f"{other.name}身边", lambda p: p != pos and chebyshev(p, pos) <= 1
-        it = _match(target, [(i.id, i.name, i) for i in self.scenario.interactables])
-        if it is not None:
-            return f"{it.name}旁边", lambda p: chebyshev(p, it.pos) <= 1
-        return None
+        candidates = [
+            [(r.id, r.name, ("room", r)) for r in rooms.values()],
+            [(o.id, o.name, ("character", o)) for o in others],
+            [(i.id, i.name, ("interactable", i)) for i in self.scenario.interactables],
+        ]
+        found = (next((_exact(target, items) for items in candidates if _exact(target, items)), None)
+                 or next((_match(target, items) for items in candidates if _match(target, items)), None))
+        if found is None:
+            return None
+        kind, obj = found
+        if kind == "room":
+            return obj.name, lambda p: self.grid.room_at(p) == obj.id
+        if kind == "character":
+            pos = obj.pos
+            return f"{obj.name}身边", lambda p: p != pos and chebyshev(p, pos) <= 1
+        return f"{obj.name}旁边", lambda p: chebyshev(p, obj.pos) <= 1
 
     def _interrupt(self, c: Character) -> str | None:
         """取消寻路与进行中的交互，返回描述；本来空闲时返回 None。"""
@@ -493,7 +502,7 @@ class World:
                        completed=False, progress=job.progress)
             kept = "，进度会保留" if act.cumulative else ""
             parts.append(f"你停止了{act.label}（已进行 {job.progress:.0f}/{act.duration_s:.0f} 秒{kept}）")
-        return "；".join(parts) or None
+        return join_describe(parts) or None
 
     def _walk(self, c: Character, path: list[Pos], dest: str, pending=None) -> str:
         """开始沿新路径行走。改道不算打断，只报告被打断的交互，返回其描述前缀。"""
@@ -673,6 +682,12 @@ class World:
         if self.voice is not None:
             self.voice.abort(sp)
         return sp
+
+
+def _exact(query: str, items: list[tuple[str, str, object]]):
+    """按 id 或名称完全一致匹配。"""
+    q = query.strip()
+    return next((obj for id_, name, obj in items if q in (id_, name)), None)
 
 
 def _match(query: str, items: list[tuple[str, str, object]]):
