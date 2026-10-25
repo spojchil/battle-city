@@ -38,7 +38,7 @@ class Turn:
     stt: str | None = None
     emotions: list[str] = field(default_factory=list)
     replies: list[str] = field(default_factory=list)
-    audio_bytes: int = 0
+    audio: bytearray = field(default_factory=bytearray)
     first_reply_s: float | None = None
     other: list[dict] = field(default_factory=list)
 
@@ -77,35 +77,39 @@ def ota(ident: dict) -> dict:
 
 
 class VirtualDevice:
-    def __init__(self, ident: dict, ws_url: str, token: str):
+    def __init__(self, ident: dict, ws_url: str, token: str, agent_id: str | None = None,
+                 agent_params: dict | None = None):
         self.ident = ident
         self.ws_url = ws_url
         self.token = token
+        # 握手时通过 X-Agent-ID 指定本连接使用的智能体，省略则使用设备绑定的智能体
+        self.agent_id = agent_id
+        # hello 中的 agent_params，例如 custom_replace_prompt 替换提示词占位符
+        self.agent_params = agent_params
         self.ws = None
         self.session_id = None
 
     @classmethod
-    def from_ota(cls) -> "VirtualDevice":
-        ident = load_identity()
+    def from_ota(cls, ident: dict | None = None, **kwargs) -> "VirtualDevice":
+        ident = ident or load_identity()
         info = ota(ident)
         if "activation" in info:
             code = info["activation"]["code"]
             raise SystemExit(f"设备 {ident['mac']} 未绑定，请在智控台用激活码 {code} 绑定后重试")
         ws = info["websocket"]
-        return cls(ident, ws["url"], ws["token"])
+        return cls(ident, ws["url"], ws["token"], **kwargs)
 
     async def __aenter__(self):
-        self.ws = await websockets.connect(
-            self.ws_url,
-            additional_headers={
-                "Authorization": f"Bearer {self.token}",
-                "Device-Id": self.ident["mac"],
-                "Client-Id": self.ident["client_id"],
-                "Protocol-Version": "1",
-            },
-            max_size=None,
-        )
-        await self.ws.send(json.dumps({
+        headers = {
+            "Authorization": f"Bearer {self.token}",
+            "Device-Id": self.ident["mac"],
+            "Client-Id": self.ident["client_id"],
+            "Protocol-Version": "1",
+        }
+        if self.agent_id:
+            headers["X-Agent-ID"] = self.agent_id
+        self.ws = await websockets.connect(self.ws_url, additional_headers=headers, max_size=None)
+        hello = {
             "type": "hello",
             "version": 1,
             "transport": "websocket",
@@ -120,7 +124,10 @@ class VirtualDevice:
                 "sample_format": "signed_int16",
                 "play_buffer_duration": 1000,
             },
-        }))
+        }
+        if self.agent_params:
+            hello["agent_params"] = self.agent_params
+        await self.ws.send(json.dumps(hello))
         while True:
             msg = await asyncio.wait_for(self.ws.recv(), timeout=10)
             if isinstance(msg, str) and json.loads(msg).get("type") == "hello":
@@ -147,17 +154,35 @@ class VirtualDevice:
             await self.ws.send(b"\0" * FRAME_BYTES)
             await asyncio.sleep(FRAME_MS / 1000)
         await self._send_json({"type": "listen", "state": "stop"})
-        sent_at = time.monotonic()
+        return await self._collect(timeout)
 
+    async def send_text(self, text: str, text_response: str | None = None, timeout: float = 30) -> Turn:
+        """以文本代替语音输入一轮；给出 text_response 时由平台直接播报该文本。"""
+        payload = {"type": "listen", "state": "detect", "text": text}
+        if text_response is not None:
+            payload["text_response"] = text_response
+        await self._send_json(payload)
+        return await self._collect(timeout)
+
+    async def _collect(self, timeout: float, settle: float = 1.0) -> Turn:
+        """收集平台对一轮输入的全部响应，直到 TTS 结束后 settle 秒内没有新的播报，或超时。
+
+        平台可能把一次回复拆成多段 TTS（例如工具调用前后各一段），因此 stop 后需稍等。
+        """
+        sent_at = time.monotonic()
         turn = Turn()
         deadline = sent_at + timeout
+        stopped = False
         while time.monotonic() < deadline:
+            wait = deadline - time.monotonic()
+            if stopped:
+                wait = min(wait, settle)
             try:
-                msg = await asyncio.wait_for(self.ws.recv(), timeout=deadline - time.monotonic())
+                msg = await asyncio.wait_for(self.ws.recv(), timeout=wait)
             except TimeoutError:
                 break
             if isinstance(msg, bytes):
-                turn.audio_bytes += len(msg)
+                turn.audio += msg
                 continue
             data = json.loads(msg)
             kind, state = data.get("type"), data.get("state")
@@ -169,8 +194,10 @@ class VirtualDevice:
                 if turn.first_reply_s is None:
                     turn.first_reply_s = round(time.monotonic() - sent_at, 2)
                 turn.replies.append(data.get("text"))
+            elif kind == "tts" and state == "start":
+                stopped = False
             elif kind == "tts" and state == "stop":
-                break
+                stopped = True
             elif kind != "tts":
                 turn.other.append(data)
         return turn
@@ -183,7 +210,9 @@ async def _run(args) -> None:
         for text in args.text:
             pcm = tts.synthesize(text, voice=args.voice, style=args.style)
             turn = await dev.say(pcm)
-            print(json.dumps({"voice": args.voice, "said": text, **turn.__dict__}, ensure_ascii=False, indent=2))
+            info = {k: v for k, v in turn.__dict__.items() if k != "audio"}
+            info["audio_s"] = round(len(turn.audio) / (SAMPLE_RATE * 2), 2)
+            print(json.dumps({"voice": args.voice, "said": text, **info}, ensure_ascii=False, indent=2))
 
 
 def main() -> None:
