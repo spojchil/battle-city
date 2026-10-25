@@ -1,0 +1,100 @@
+# 引擎测试用的小剧本。
+#
+#   x: 01234567890123
+#   y0 ##############
+#   y1 s#aaaaaaa+bbb#     a 休息区  b 走廊  + 普通门
+#   y2 s=aaaaaaa#bbb#     s 门外（场外） = 通往门外的门
+#   y3 s#aaaaaaa#bbb#
+#   y4 #####k####+###     k 只有 worker 能通过的门
+#   y5 ##ccccccc#ddd#     c 办公室  d 储藏间
+#   y6 ##ccccccc#ddd#
+#   y7 ##############
+id: mini
+title: 测试场景
+intro: 用于引擎测试。
+duration_s: 600
+start_clock: "14:00"
+map:
+  legend:
+    "#": {kind: wall}
+    "s": {kind: floor, room: street}
+    "a": {kind: floor, room: lounge}
+    "b": {kind: floor, room: hall}
+    "c": {kind: floor, room: office}
+    "d": {kind: floor, room: store}
+    "+": {kind: door}
+    "=": {kind: door}
+    "k": {kind: door, allowed: [worker]}
+  grid: |
+    ##############
+    s#aaaaaaa+bbb#
+    s=aaaaaaa#bbb#
+    s#aaaaaaa#bbb#
+    #####k####+###
+    ##ccccccc#ddd#
+    ##ccccccc#ddd#
+    ##############
+rooms:
+  lounge: {name: 休息区}
+  hall: {name: 走廊}
+  office: {name: 办公室}
+  store: {name: 储藏间}
+  street: {name: 门外, offstage: true}
+interactables:
+  - id: lamp
+    name: 台灯
+    pos: [2, 1]
+    flags: {lamp: "off"}
+    describe:
+      - when: {lamp: "off"}
+        text: 台灯关着
+      - when: {lamp: "on"}
+        text: 台灯亮着
+    actions:
+      - id: switch_on
+        label: 打开台灯
+        seen_as: 在开台灯
+        duration_s: 2
+        requires: {lamp: "off"}
+        on_complete:
+          set: {lamp: "on"}
+          reveal: 灯亮了，照出桌上的字条。
+          notify: {guard: 监控显示休息区的灯亮了。}
+  - id: safe
+    name: 保险柜
+    pos: [12, 6]
+    describe:
+      - when: {safe: open}
+        text: 柜门敞开着
+    actions:
+      - id: crack
+        label: 撬保险柜
+        seen_as: 在撬保险柜
+        duration_s: 20
+        who: [worker]
+        cumulative: true
+        sound: {text: 金属刮擦声, volume: 正常, every_s: 5}
+        on_complete:
+          set: {safe: open}
+          reveal: 柜门开了。
+characters:
+  - id: player
+    name: 我
+    role: 住客
+    start: [3, 2]
+    player: true
+  - id: worker
+    name: 老李
+    role: 工人
+    start: [0, 1]
+  - id: guard
+    name: 小张
+    role: 保安
+    start: [6, 5]
+  - id: guest
+    name: 阿美
+    role: 住客
+    start: [11, 2]
+judge:
+  truth: 无
+  criteria: 无
