@@ -2,11 +2,11 @@
 
 import json
 import logging
-import os
 
 import httpx
 
 from linx_game.engine.world import World
+from linx_game.llm_gateway import prepare, upstream
 
 log = logging.getLogger("linx_game.judge")
 
@@ -57,20 +57,19 @@ def evidence(world: World, cid: str) -> str:
 
 async def judge(world: World, cid: str) -> dict:
     scenario = world.scenario
-    body = {
-        "model": os.getenv("GAME_LLM_MODEL", "moonshotai/kimi-k3-free"),
-        "thinking": {"type": "disabled"},
+    body = prepare({
+        "model": "moonshotai/kimi-k3-free",
         "messages": [
             {"role": "system", "content": PROMPT.format(truth=scenario.judge_truth, criteria=scenario.judge_criteria)},
             {"role": "user", "content": evidence(world, cid)},
         ],
         "tools": [VERDICT_TOOL],
         "tool_choice": {"type": "function", "function": {"name": "verdict"}},
-    }
+    })
+    base_url, api_key = upstream()
     try:
-        async with httpx.AsyncClient(base_url=os.environ["QINIU_AI_BASE_URL"], timeout=90) as client:
-            resp = await client.post("/chat/completions", json=body,
-                                     headers={"Authorization": f"Bearer {os.environ['QINIU_AI_API_KEY']}"})
+        async with httpx.AsyncClient(base_url=base_url, timeout=90) as client:
+            resp = await client.post("/chat/completions", json=body, headers={"Authorization": f"Bearer {api_key}"})
         call = resp.json()["choices"][0]["message"]["tool_calls"][0]
         result = json.loads(call["function"]["arguments"])
     except Exception:

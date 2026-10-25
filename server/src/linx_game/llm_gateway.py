@@ -1,7 +1,8 @@
 """大模型网关。
 
-对灵矽平台暴露 OpenAI 兼容的 /chat/completions 接口，转发到七牛 AI 大模型推理，
-并在转发时注入平台自定义模型无法配置的参数（例如关闭思考）。
+对灵矽平台暴露 OpenAI 兼容的 /chat/completions 接口，转发到上游推理服务（默认 DeepSeek 官方 API，
+LLM_UPSTREAM=qiniu 时为七牛 AI 大模型推理），并在转发时注入平台自定义模型无法配置的参数（例如关闭思考）。
+实际使用的模型由 LLM_MODEL 指定，默认取上游的默认模型。
 
 灵矽侧把本网关注册为自定义模型：base_url 指向 <服务地址>/llm/v1，
 api_key 填 LLM_GATEWAY_TOKEN。网关只接受携带该口令的请求。
@@ -26,7 +27,32 @@ log = logging.getLogger("linx_game.llm_gateway")
 # 按上游模型注入的请求参数
 BODY_OVERRIDES = {
     "moonshotai/kimi-k3-free": {"thinking": {"type": "disabled"}},
+    "deepseek-flash": {"thinking": {"type": "disabled"}},
 }
+
+# 上游推理服务：名称 → (base_url 环境变量, api_key 环境变量, 默认模型)
+# 七牛免费模型的频率限制不足以支撑多个角色同时思考，默认使用 DeepSeek 官方 API
+UPSTREAMS = {
+    "deepseek": ("DEEPSEEK_BASE_URL", "DEEPSEEK_API_KEY", "deepseek-flash"),
+    "qiniu": ("QINIU_AI_BASE_URL", "QINIU_AI_API_KEY", "moonshotai/kimi-k3-free"),
+}
+
+
+def _upstream_spec() -> tuple[str, str, str]:
+    return UPSTREAMS[os.getenv("LLM_UPSTREAM", "deepseek")]
+
+
+def upstream() -> tuple[str, str]:
+    """当前上游的 (base_url, api_key)。"""
+    base_var, key_var, _ = _upstream_spec()
+    return os.environ[base_var], os.environ[key_var]
+
+
+def prepare(body: dict) -> dict:
+    """按配置设定模型名并注入该模型需要的参数。"""
+    body["model"] = os.getenv("LLM_MODEL") or _upstream_spec()[2]
+    body.update(BODY_OVERRIDES.get(body["model"], {}))
+    return body
 
 
 class Controller(Protocol):
@@ -35,8 +61,8 @@ class Controller(Protocol):
     def build(self, messages: list[dict]) -> list[dict]:
         """以平台转发的消息为基础，返回实际发给模型的完整消息列表。"""
 
-    def on_thought(self, text: str) -> None:
-        """模型正文（角色内心想法），不回传平台，不会被播报。"""
+    def on_reply(self, thought: str, tool_calls: list[dict]) -> None:
+        """模型的回复：正文（角色内心想法，不回传平台，不会被播报）与工具调用。"""
 
     def on_turn_done(self) -> None:
         """本轮结束：模型未调用工具，或工具结果已返回。"""
@@ -84,16 +110,16 @@ def _transcript(messages: list[dict]) -> str:
 
 
 async def _review(body: dict) -> None:
-    request = {
+    request = prepare({
         "model": body.get("model"), "max_tokens": 300, "stream": False,
         "messages": [{"role": "system", "content": REVIEW_PROMPT},
                      {"role": "user", "content": _transcript(body.get("messages", []))}],
-        **BODY_OVERRIDES.get(body.get("model"), {}),
-    }
+    })
+    base_url, api_key = upstream()
     try:
-        async with httpx.AsyncClient(base_url=os.environ["QINIU_AI_BASE_URL"], timeout=60) as client:
+        async with httpx.AsyncClient(base_url=base_url, timeout=60) as client:
             resp = await client.post("/chat/completions", json=request,
-                                     headers={"Authorization": f"Bearer {os.environ['QINIU_AI_API_KEY']}"})
+                                     headers={"Authorization": f"Bearer {api_key}"})
         verdict = resp.json()["choices"][0]["message"]["content"].strip()
     except Exception:
         log.exception("dev-review failed")
@@ -113,22 +139,20 @@ def start_review(body: dict) -> None:
 
 
 # 上游推理服务有频率限制：限制同时进行的请求数，并对 429 按退避重试
-_upstream_slots = asyncio.Semaphore(int(os.getenv("LLM_GATEWAY_CONCURRENCY", "3")))
+_upstream_slots = asyncio.Semaphore(int(os.getenv("LLM_GATEWAY_CONCURRENCY", "8")))
 RETRY_DELAYS_S = (1, 2, 4, 8)
 
 
-async def _send_with_retry(client: httpx.AsyncClient, body: dict) -> httpx.Response:
+async def _send_with_retry(client: httpx.AsyncClient, body: dict, api_key: str) -> httpx.Response:
     for delay in (*RETRY_DELAYS_S, None):
-        upstream = await client.send(
-            client.build_request(
-                "POST", "/chat/completions", json=body,
-                headers={"Authorization": f"Bearer {os.environ['QINIU_AI_API_KEY']}"},
-            ),
+        resp = await client.send(
+            client.build_request("POST", "/chat/completions", json=body,
+                                 headers={"Authorization": f"Bearer {api_key}"}),
             stream=True,
         )
-        if upstream.status_code != 429 or delay is None:
-            return upstream
-        await upstream.aclose()
+        if resp.status_code != 429 or delay is None:
+            return resp
+        await resp.aclose()
         log.warning("upstream 429, retry in %ss", delay)
         await asyncio.sleep(delay)
 
@@ -145,12 +169,15 @@ async def chat_completions(request: Request) -> Response:
     controller = controllers.get(device)
     if controller is not None:
         messages = body.get("messages", [])
+        if dump_dir := os.getenv("LLM_GATEWAY_DUMP_DIR"):
+            with open(os.path.join(dump_dir, f"platform_{device.replace(':', '')}.json"), "w") as f:
+                json.dump(messages[-4:], f, ensure_ascii=False, indent=2)
         # 工具结果返回后平台会再请求一次模型；角色的行动已由工具完成，这一轮直接结束
-        if messages and messages[-1].get("role") == "tool":
+        if is_tool_followup(messages):
             controller.on_turn_done()
             return _empty_reply(body)
         body["messages"] = controller.build(messages)
-    body.update(BODY_OVERRIDES.get(body.get("model"), {}))
+    prepare(body)
     for message in body.get("messages", []):
         if message.get("role") == "system" and isinstance(message.get("content"), str):
             message["content"] = strip_platform_prompt(message["content"])
@@ -171,19 +198,32 @@ async def chat_completions(request: Request) -> Response:
             json.dump({k: v for k, v in request.headers.items() if k != "authorization"}, f, indent=2)
     start_review(body)
 
-    client = httpx.AsyncClient(base_url=os.environ["QINIU_AI_BASE_URL"], timeout=120)
+    base_url, api_key = upstream()
+    client = httpx.AsyncClient(base_url=base_url, timeout=120)
     await _upstream_slots.acquire()
     try:
-        upstream = await _send_with_retry(client, body)
+        upstream_resp = await _send_with_retry(client, body, api_key)
     except BaseException:
         _upstream_slots.release()
         await client.aclose()
         raise
 
+    if upstream_resp.status_code >= 400:
+        error = await upstream_resp.aread()
+        _upstream_slots.release()
+        await upstream_resp.aclose()
+        await client.aclose()
+        log.warning("upstream %s device=%s %s", upstream_resp.status_code, device, error[:500].decode(errors="replace"))
+        if dump_dir := os.getenv("LLM_GATEWAY_DUMP_DIR"):
+            with open(os.path.join(dump_dir, "last_error_request.json"), "w") as f:
+                json.dump(body, f, ensure_ascii=False, indent=2)
+        return Response(error, status_code=upstream_resp.status_code, media_type="application/json")
+
     async def relay():
         buffer = b""
         try:
-            async for chunk in upstream.aiter_raw():
+            # 上游可能压缩响应，按解压后的内容转发与解析
+            async for chunk in upstream_resp.aiter_bytes():
                 buffer += chunk
                 if controller is None:
                     yield chunk
@@ -191,28 +231,48 @@ async def chat_completions(request: Request) -> Response:
                 # 正文是角色的内心想法，不回传平台，避免被播报
                 thought, stripped = _strip_content(buffer)
                 yield stripped
-                controller.on_thought(thought)
+                controller.on_reply(thought, _tool_calls(buffer))
                 if b'"tool_calls"' not in buffer:
                     controller.on_turn_done()
         finally:
             _upstream_slots.release()
-            await upstream.aclose()
+            await upstream_resp.aclose()
             await client.aclose()
             log.info("reply device=%s %s", device, json.dumps(_reply_text(buffer), ensure_ascii=False))
 
     return StreamingResponse(
-        relay(), status_code=upstream.status_code,
-        media_type=upstream.headers.get("content-type", "application/json"),
+        relay(), status_code=upstream_resp.status_code,
+        media_type=upstream_resp.headers.get("content-type", "application/json"),
     )
+
+
+def _sse_json(line: str) -> dict | None:
+    """解析 SSE（或普通 JSON）响应中的一行；不是 JSON 对象时返回 None。"""
+    payload = line.removeprefix("data:").strip()
+    if not payload.startswith("{"):
+        return None
+    try:
+        return json.loads(payload)
+    except json.JSONDecodeError:
+        log.warning("unparsable upstream line: %r", line[:200])
+        return None
+
+
+def is_tool_followup(messages: list[dict]) -> bool:
+    """是否为工具结果返回后的二次请求。平台有时会在工具结果后追加一条空白的用户消息。"""
+    for m in reversed(messages):
+        if m.get("role") == "user" and not str(m.get("content") or "").strip():
+            continue
+        return m.get("role") == "tool"
+    return False
 
 
 def _strip_content(raw: bytes) -> tuple[str, bytes]:
     """清空 SSE 流（或普通 JSON）中的正文，返回 (正文, 改写后的响应)。"""
     thought, lines = [], []
     for line in raw.decode(errors="replace").split("\n"):
-        payload = line.removeprefix("data: ").strip()
-        if payload.startswith("{"):
-            data = json.loads(payload)
+        data = _sse_json(line)
+        if data is not None:
             for choice in data.get("choices") or []:
                 msg = choice.get("delta") or choice.get("message") or {}
                 if msg.get("content"):
@@ -221,6 +281,25 @@ def _strip_content(raw: bytes) -> tuple[str, bytes]:
             line = ("data: " if line.startswith("data:") else "") + json.dumps(data, ensure_ascii=False)
         lines.append(line)
     return "".join(thought).strip(), "\n".join(lines).encode()
+
+
+def _tool_calls(raw: bytes) -> list[dict]:
+    """从 SSE 流（或普通 JSON）中拼出完整的工具调用列表。"""
+    calls: dict[int, dict] = {}
+    for line in raw.decode(errors="replace").splitlines():
+        data = _sse_json(line)
+        if data is None:
+            continue
+        for choice in data.get("choices") or []:
+            msg = choice.get("delta") or choice.get("message") or {}
+            for i, delta in enumerate(msg.get("tool_calls") or []):
+                call = calls.setdefault(delta.get("index", i), {
+                    "id": "", "type": "function", "function": {"name": "", "arguments": ""}})
+                call["id"] = delta.get("id") or call["id"]
+                fn = delta.get("function") or {}
+                call["function"]["name"] += fn.get("name") or ""
+                call["function"]["arguments"] += fn.get("arguments") or ""
+    return [calls[i] for i in sorted(calls)]
 
 
 def _empty_reply(body: dict) -> Response:
@@ -238,10 +317,10 @@ def _reply_text(raw: bytes) -> str:
     """从上游响应（SSE 流或普通 JSON）中拼出回复文本与工具调用，用于日志。"""
     parts = []
     for line in raw.decode(errors="replace").splitlines():
-        line = line.removeprefix("data: ").strip()
-        if not line.startswith("{"):
+        data = _sse_json(line)
+        if data is None:
             continue
-        for choice in json.loads(line).get("choices") or []:
+        for choice in data.get("choices") or []:
             msg = choice.get("delta") or choice.get("message") or {}
             parts.append(msg.get("content") or "")
             for call in msg.get("tool_calls") or []:
