@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 import pytest
 import yaml
 from conftest import MINI
@@ -179,7 +181,8 @@ def test_speech_sentences_and_abort(h):
     h.advance(3)
     assert h.drain("player") == []
     end = h.events_of("speech_end")[-1].data
-    assert end == {"cid": "guest", "speech_id": sp.id, "aborted": True, "spoken": "第一句。第二句话！"}
+    assert end == {"cid": "guest", "speech_id": sp.id, "aborted": True, "spoken": "第一句。第二句话！",
+                   "heard_by": ["guard", "player"]}
     assert h.events_of("speech")[0].data["hearers"]["player"]["level"] == "clear"
     assert [p.data["sentence"] for p in w.recordings["player"]] == ["第一句。", "第二句话！"]
 
@@ -393,6 +396,25 @@ def test_speaking_nearby(h):
     assert w.speaking_nearby("player") == []
     w.live_speaking.add("player")              # 玩家按住麦克风说话
     assert [c.id for c in w.speaking_nearby("guest")] == ["player"]
+    w.live_speaking.clear()
+
+    w.voice = SimpleNamespace(start=lambda sp: None, abort=lambda sp: None)   # 语音后端不报告播放结束
+    w.say("guest", "这句话没有播放结束的通知。")
+    assert [c.id for c in w.speaking_nearby("player")] == ["guest"]
+    h.advance(3 + 0.4 * 13 + 1)
+    assert w.speaking_nearby("player") == []
+
+
+def test_speech_end_reports_hearers(h):
+    w = h.world
+    h.place("player", 3, 2)
+    h.place("guest", 4, 2)
+    h.place("guard", 3, 6)                     # 隔墙的办公室，只能听到模糊的声音
+    h.place("worker", 11, 6)                   # 储藏间
+    w.say("guest", "你好。")
+    h.advance(5)
+    end = next(e for e in h.events if e.kind == "speech_end")
+    assert not end.data["aborted"] and end.data["heard_by"] == ["player"]
 
 
 def test_snapshot_for_viewer(h):

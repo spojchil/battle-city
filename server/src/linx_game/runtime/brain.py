@@ -23,6 +23,10 @@ SETTLE_S = 1.5
 SETTLE_MAX_S = 6
 # 附近有人还在说话时先听完再思考，最长等待（秒）
 HEAR_OUT_MAX_S = 12
+# 对人说完话后留给对方回答的时间（秒）：这期间只有听到有人说话才叫醒角色，其他动静等窗口过了再看
+REPLY_WINDOW_S = 8
+# 对方是玩家时窗口更长：真人要按下麦克风、说完、再经语音识别
+REPLY_WINDOW_PLAYER_S = 15
 # 等待一轮结束的上限（秒），超时后继续下一轮
 TURN_TIMEOUT_S = 40
 # 保留的历史消息条数（不含系统提示词与示例）
@@ -75,6 +79,8 @@ class Brain:
         self._results: list[str] = []
         self._wake = asyncio.Event()
         self._turn_done = asyncio.Event()
+        self._hold_until = 0.0                              # 留给对方回答的窗口截止（事件循环时间）
+        self._deferred: asyncio.TimerHandle | None = None   # 窗口过后补发的叫醒
         char = next(c for c in world.scenario.characters if c.id == cid)
         places = "、".join(room.name for room in world.scenario.rooms.values())
         self.system = PROMPT.format(name=char.name, role=char.role, places=places,
@@ -119,10 +125,23 @@ class Brain:
 
     def wake_after(self, seconds: float) -> None:
         """角色要求过一段时间再想一想（wait 工具）。"""
-        asyncio.get_running_loop().call_later(seconds, self.wake)
+        asyncio.get_running_loop().call_later(seconds, self.wake, False)
 
-    def wake(self) -> None:
-        self._wake.set()
+    def hold(self, seconds: float) -> None:
+        """对人说完话后留给对方回答：接下来 seconds 秒内只有听到有人说话才叫醒。"""
+        self._hold_until = max(self._hold_until, asyncio.get_running_loop().time() + seconds)
+
+    def wake(self, urgent: bool = True) -> None:
+        """urgent 为听到有人说话，立即叫醒；其他动静在留给对方回答的时间内先记着，窗口过了再一并处理。"""
+        loop = asyncio.get_running_loop()
+        if urgent or loop.time() >= self._hold_until:
+            self._wake.set()
+        elif self._deferred is None:
+            self._deferred = loop.call_later(self._hold_until - loop.time() + 0.05, self._wake_deferred)
+
+    def _wake_deferred(self) -> None:
+        self._deferred = None
+        self.wake(urgent=False)
 
     async def _settle(self) -> None:
         """唤醒后直到 SETTLE_S 内没有新的唤醒（最长 SETTLE_MAX_S）再继续。"""

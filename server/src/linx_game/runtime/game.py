@@ -13,7 +13,7 @@ from linx_game.devtools.provision import STATE_PATH
 from linx_game.engine.scenario import Scenario, load_scenario
 from linx_game.engine.world import Event, World
 from linx_game.runtime import tools
-from linx_game.runtime.brain import Brain
+from linx_game.runtime.brain import REPLY_WINDOW_PLAYER_S, REPLY_WINDOW_S, Brain
 from linx_game.runtime.judge import judge
 from linx_game.runtime.session import LinxSession
 from linx_game.runtime.voice import Ear, Mouth, VoiceRouter
@@ -140,13 +140,18 @@ class Game:
             # 玩家自己说的话也显示在字幕中
             asyncio.create_task(self.send({"type": "speech", "cid": self.player, "name": "你",
                                            "sentence": event.data["sentence"], "level": "clear", "gain": 1.0}))
+        if event.kind == "speech_end" and event.data["cid"] in self.brains \
+                and not event.data["aborted"] and event.data["heard_by"]:
+            # 对人说完一句话，留给对方回答的时间；对方是玩家时更长
+            seconds = REPLY_WINDOW_PLAYER_S if self.player in event.data["heard_by"] else REPLY_WINDOW_S
+            self.brains[event.data["cid"]].hold(seconds)
         if event.kind != "percept":
             return
         cid, percept = event.data["cid"], event.data["percept"]
         if cid == self.player:
             asyncio.create_task(self._send_percept(percept))
         elif percept.wake and cid in self.brains:
-            self.brains[cid].wake()
+            self.brains[cid].wake(urgent=percept.kind == "speech")
 
     async def _send_percept(self, percept) -> None:
         await self.send({"type": "percept", "t": percept.t, "clock": self.world.clock_text(percept.t),
