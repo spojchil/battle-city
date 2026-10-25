@@ -46,7 +46,8 @@ def render(world: "World", cid: str, percepts: list[Percept]) -> str:
     lines.append("【你的状态】")
     status = []
     if c.path:
-        status.append(f"正在前往{c.dest}（还有 {len(c.path)} 步）")
+        then = f"，到达后开始{c.pending[1].label}" if c.pending else ""
+        status.append(f"正在前往{c.dest}（还有 {len(c.path)} 步）{then}")
     if c.job:
         status.append(f"正在{c.job.action.label}（{c.job.progress:.0f}/{c.job.action.duration_s:.0f} 秒）")
     if c.speech:

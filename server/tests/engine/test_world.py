@@ -83,7 +83,7 @@ def test_offstage_room(h):
     assert h.drain("worker") == []
 
     w.move_to("worker", "休息区")
-    h.advance(0.7)                             # 踏上门格，进入视野
+    h.advance(1.8)                             # 踏上门格进入视野，确认期过后报告
     entered = h.drain("player", "enter")
     assert [p.text for p in entered] == ["老李（工人）来到了休息区"]
     assert entered[0].wake
@@ -115,10 +115,45 @@ def test_enter_leave_footsteps(h):
 
     h.advance(0.7)
     assert w.step("player", 1, 0)              # 踏上门格
+    h.advance(1.1)
     assert [p.text for p in h.drain("guest")] == ["我（住客）来到了走廊"]
+    assert w.step("player", -1, 0)
+    h.advance(1.1)
+    assert [p.text for p in h.drain("guest")] == ["我（住客）离开了走廊"]
+
+
+def test_brief_visibility_change_cancels_out(h):
+    w = h.world
+    h.place("player", 8, 1)
+    h.place("guest", 10, 2)
+    assert w.step("player", 1, 0)              # 踏上门格，随即退回
     h.advance(0.7)
     assert w.step("player", -1, 0)
-    assert [p.text for p in h.drain("guest")] == ["我（住客）离开了走廊"]
+    h.advance(2)
+    assert [p.kind for p in h.drain("guest") if p.kind in ("enter", "leave")] == []
+
+
+def test_audibility(h):
+    w = h.world
+    h.place("guest", 10, 1)
+    h.place("player", 7, 1)                    # 隔一扇门，声音代价 6
+    assert w.audibility("guest", "player") == ("clear", round(1 - 0.5 * 6 / 7, 3))
+    w.say("guest", "这是一句悄悄话，说得很慢很慢。", "耳语")
+    assert w.audibility("guest", "player") == (None, 0.0)    # 取正在说的话的音量
+    assert w.audibility("guest", "player", "大喊")[0] == "clear"
+    h.place("worker", 0, 2)
+    h.place("player", 2, 2)
+    assert w.audibility("worker", "player", "大喊") == (None, 0.0)
+    assert w.audibility("player", "worker", "大喊") == (None, 0.0)
+
+
+def test_move_to_blocked_coordinate(h):
+    w = h.world
+    h.place("player", 6, 2)
+    assert w.move_to("player", (2, 1)).startswith("你开始走向台灯旁边")
+    h.advance(3)
+    assert pos(h, "player") == (3, 2)          # 可交互点旁最近的可站立格
+    assert w.move_to("player", (0, 0)) == "无法到达(0, 0)附近"
 
 
 # ---- 说话 ----
@@ -225,12 +260,8 @@ def test_player_said(h):
 
 def test_interact_completion_effects(h):
     w = h.world
-    h.place("player", 6, 2)
-    assert w.interact("player", "台灯", "打开台灯") == "你离台灯太远，需要先走过去"
     assert w.interact("player", "电视", "打开") == "找不到名为「电视」的可交互物"
     assert w.interact("player", "台灯", "砸") == "台灯没有「砸」这个行动，现在可以：打开台灯"
-    w.move_to("player", "台灯")
-    h.advance(5)
     assert w.interact("player", "lamp", "switch_on") == "你开始打开台灯，还需约 2 秒"
     assert w.snapshot()["characters"][0]["activity"] == "在开台灯"
     h.advance(2.1)
@@ -244,6 +275,41 @@ def test_interact_completion_effects(h):
     assert [e.data for e in h.events_of("flag")] == [{"key": "lamp", "value": "on", "old": "off"}]
     assert h.events_of("job_end")[-1].data["completed"]
     assert w.interact("player", "台灯", "打开台灯") == "现在无法打开台灯"
+
+
+def test_interact_walks_there_first(h):
+    w = h.world
+    h.place("player", 6, 2)
+    assert w.interact("player", "台灯", "打开台灯") == "你走向台灯，到达后开始打开台灯"
+    assert w.characters["player"].job is None
+    h.advance(2.2)                             # 3 步
+    assert pos(h, "player") == (3, 2)
+    assert [p.text for p in h.drain("player", "arrived")] == ["你到达了台灯旁边，你开始打开台灯，还需约 2 秒"]
+    assert w.characters["player"].job is not None
+    h.advance(2.1)
+    assert w.flags["lamp"] == "on"
+    assert w.interact("guard", "台灯", "打开台灯") == "现在无法打开台灯"
+
+
+@pytest.mark.parametrize("cancel", [
+    lambda w: w.stop("player"),
+    lambda w: w.move_to("player", "走廊"),
+    lambda w: w.step("player", 0, 1),
+])
+def test_interact_walk_cancelled(h, cancel):
+    w = h.world
+    h.place("player", 6, 2)
+    w.interact("player", "台灯", "打开台灯")
+    h.advance(0.5)                             # 尚未迈出第一步，step 不受限速影响
+    cancel(w)
+    h.advance(6)
+    assert w.characters["player"].job is None
+    assert w.characters["player"].pending is None
+    assert w.flags["lamp"] == "off"
+
+
+def test_interact_unreachable(h):
+    assert h.world.interact("guard", "台灯", "打开台灯") == "无法走到台灯旁边"
 
 
 def test_interrupt_restarts_non_cumulative(h):

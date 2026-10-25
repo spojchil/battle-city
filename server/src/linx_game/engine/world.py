@@ -18,7 +18,8 @@ from typing import Protocol
 from .grid import Grid, chebyshev, direction
 from .perception import Percept
 from .scenario import Action, CharacterSpec, Interactable, Pos, Scenario
-from .sound import CLEAR, VOLUMES, audibility
+from .sound import CLEAR, VOLUMES
+from .sound import audibility as sound_level
 
 log = logging.getLogger("linx_game.engine")
 
@@ -27,6 +28,7 @@ SIM_CHAR_S = 0.22           # 无语音后端时，模拟播放每字耗时
 FOOTSTEP_COST = 6           # 脚步声可闻的声音代价上限
 FOOTSTEP_REPEAT_S = 10      # 同一对角色的脚步声感知间隔
 RECORDED_KINDS = ("speech", "muffled", "sound")   # 录音笔记录的感知种类
+VIS_SETTLE_S = 1.0          # 进出视野的确认延迟：此时间内反复进出（如穿过一格宽的区域）相互抵消
 
 _SPEAK_VERB = {"耳语": "低声说", "正常": "说", "大喊": "大声喊"}
 _MUFFLED_VERB = {"耳语": "低声说话", "正常": "说话", "大喊": "大声喊话"}
@@ -98,6 +100,7 @@ class Character:
     pos: Pos
     path: list[Pos] = field(default_factory=list)   # 剩余的寻路步
     dest: str | None = None                         # 寻路目的地的描述
+    pending: tuple[Interactable, Action] | None = None   # 到达后自动开始的交互
     move_acc: float = 0.0
     last_step_t: float = -math.inf
     job: Job | None = None
@@ -138,6 +141,7 @@ class World:
         self._subscribers: list[Callable[[Event], None]] = []
         self._speech_ids = itertools.count(1)
         self._footsteps: dict[tuple[str, str], float] = {}   # (听者, 走动者) -> 上次感知时刻
+        self._vis_pending: dict[tuple[str, str], tuple[bool, float]] = {}   # (观察者, 走动者) -> (原先是否可见, 变化时刻)
 
     # ---- 时间 ----
 
@@ -160,12 +164,12 @@ class World:
                     c.move_acc -= STEP_S
                     self._move(c, c.path.pop(0))
                 if not c.path:
-                    self._perceive(c, "arrived", f"你到达了{c.dest}", True)
-                    c.dest, c.move_acc = None, 0.0
+                    self._arrive(c)
             if c.job:
                 self._advance_job(c, dt)
             if self.voice is None and c.speech:
                 self._advance_sim(c, dt)
+        self._flush_visibility()
 
     async def run(self, hz: float = 10) -> None:
         """以固定频率循环调用 tick，直到被取消。"""
@@ -187,20 +191,15 @@ class World:
                 return f"找不到名为「{target}」的地点"
             label, is_goal = found
         else:
-            goal = (int(target[0]), int(target[1]))
-            label = self.place_name(goal)
-
-            def is_goal(p):
-                return p == goal
+            label, is_goal = self._resolve_pos(c, (int(target[0]), int(target[1])))
         path = self.grid.find_path(c.pos, is_goal, lambda p: self._walkable(c, p))
         if path is None:
             return f"无法到达{label}"
-        c.path, c.dest = [], None           # 改道不算打断，只报告被打断的交互
         if not path:
+            c.path, c.dest, c.pending = [], None, None
             return f"你已经在{label}"
-        interrupted = self._interrupt(c)
-        c.path, c.dest = path, label
-        return (f"{interrupted}。" if interrupted else "") + f"你开始走向{label}，约 {len(path) * STEP_S:.0f} 秒到达"
+        prefix = self._walk(c, path, label)
+        return prefix + f"你开始走向{label}，约 {len(path) * STEP_S:.0f} 秒到达"
 
     def step(self, cid: str, dx: int, dy: int) -> bool:
         """单格移动（玩家键盘操作），受步行速度限制；成功时取消寻路与交互。"""
@@ -221,7 +220,10 @@ class World:
     # ---- 交互 ----
 
     def interact(self, cid: str, target: str, action: str) -> str:
-        """在 1 格内执行可交互点的行动；target 与 action 可用名称或 id。"""
+        """执行可交互点的行动；target 与 action 可用名称或 id。
+
+        不在 1 格内时先走到可交互点旁最近的可站立格，到达后自动开始；途中的移动、step、stop 会取消。
+        """
         c = self.characters[cid]
         it = _match(target, [(i.id, i.name, i) for i in self.scenario.interactables])
         if it is None:
@@ -235,7 +237,11 @@ class World:
         if not flags_match(act.requires, self.flags):
             return f"现在无法{act.label}"
         if chebyshev(c.pos, it.pos) > 1:
-            return f"你离{it.name}太远，需要先走过去"
+            path = self.grid.find_path(c.pos, lambda p: chebyshev(p, it.pos) <= 1, lambda p: self._walkable(c, p))
+            if path is None:
+                return f"无法走到{it.name}旁边"
+            prefix = self._walk(c, path, f"{it.name}旁边", pending=(it, act))
+            return prefix + f"你走向{it.name}，到达后开始{act.label}"
         if c.job and c.job.key == (it.id, act.id):
             return f"你已经在{act.label}了"
 
@@ -251,6 +257,17 @@ class World:
             return f"你完成了{act.label}"
         resumed = "（接着之前的进度）" if progress else ""
         return f"你开始{act.label}{resumed}，还需约 {act.duration_s - progress:.0f} 秒"
+
+    def audibility(self, src_cid: str, dst_cid: str, volume: str | None = None) -> tuple[str | None, float]:
+        """按两人当前位置计算 src 的声音传到 dst 的 (clear|muffled|None, 增益)。
+
+        volume 省略时取 src 正在说的话的音量，没有在说话时按「正常」。
+        """
+        src, dst = self.characters[src_cid], self.characters[dst_cid]
+        if volume is None:
+            volume = src.speech.volume if src.speech else "正常"
+        level, gain = sound_level(self.grid.sound_cost(src.pos, dst.pos), volume)
+        return level, round(gain, 3)
 
     def can_do(self, cid: str, action: Action) -> bool:
         """角色身份与当前标志是否允许执行该行动（不考虑距离）。"""
@@ -436,7 +453,7 @@ class World:
         parts = []
         if c.path:
             parts.append("你停下了脚步")
-            c.path, c.dest, c.move_acc = [], None, 0.0
+            c.path, c.dest, c.pending, c.move_acc = [], None, None, 0.0
         job = c.job
         if job:
             c.job = None
@@ -449,6 +466,44 @@ class World:
             parts.append(f"你停止了{act.label}（已进行 {job.progress:.0f}/{act.duration_s:.0f} 秒{kept}）")
         return "；".join(parts) or None
 
+    def _walk(self, c: Character, path: list[Pos], dest: str, pending=None) -> str:
+        """开始沿新路径行走。改道不算打断，只报告被打断的交互，返回其描述前缀。"""
+        c.path, c.dest, c.pending = [], None, None
+        interrupted = self._interrupt(c)
+        c.path, c.dest, c.pending = path, dest, pending
+        return f"{interrupted}。" if interrupted else ""
+
+    def _arrive(self, c: Character) -> None:
+        dest, pending = c.dest, c.pending
+        c.dest, c.pending, c.move_acc = None, None, 0.0
+        text = f"你到达了{dest}"
+        if pending:
+            it, act = pending
+            text += f"，{self.interact(c.id, it.id, act.id)}"
+        self._perceive(c, "arrived", text, True)
+
+    def _resolve_pos(self, c: Character, goal: Pos) -> tuple[str, Callable[[Pos], bool]]:
+        """坐标目的地；不可站立时（例如可交互点所在格）改为其旁最近的可站立格。"""
+        if self._walkable(c, goal):
+            return self.place_name(goal), lambda p: p == goal
+        it = next((i for i in self.scenario.interactables if i.pos == goal), None)
+        label = f"{it.name}旁边" if it else f"{self.place_name(goal)}附近"
+        return label, lambda p: chebyshev(p, goal) <= 1
+
+    def _flush_visibility(self) -> None:
+        """把已确认的进出视野变化写成 enter / leave 感知。"""
+        t = self.now()
+        for key, (was, t0) in list(self._vis_pending.items()):
+            if t - t0 < VIS_SETTLE_S:
+                continue
+            del self._vis_pending[key]
+            o, c = self.characters[key[0]], self.characters[key[1]]
+            place = self.place_name(o.pos)
+            if was:
+                self._perceive(o, "leave", f"{c.name}（{c.role}）离开了{place}", True, who=c.id)
+            else:
+                self._perceive(o, "enter", f"{c.name}（{c.role}）来到了{place}", True, who=c.id)
+
     def _move(self, c: Character, nxt: Pos) -> None:
         old = c.pos
         seen_before = {o.id for o in self.characters.values() if o is not c and self._sees(old, o.pos)}
@@ -459,11 +514,13 @@ class World:
             if o is c:
                 continue
             was, now = o.id in seen_before, self._sees(nxt, o.pos)
-            place = self.place_name(o.pos)
-            if was and not now:
-                self._perceive(o, "leave", f"{c.name}（{c.role}）离开了{place}", True, who=c.id)
-            elif now and not was:
-                self._perceive(o, "enter", f"{c.name}（{c.role}）来到了{place}", True, who=c.id)
+            if was != now:
+                # 视野变化先暂存，确认期内又变回原状时成对抵消
+                key = (o.id, c.id)
+                if key in self._vis_pending:
+                    del self._vis_pending[key]
+                else:
+                    self._vis_pending[key] = (was, self.now())
             elif not now:
                 self._footstep(o, c, old)
 
@@ -495,7 +552,7 @@ class World:
         costs = self.grid.sound_costs(src.pos)
         for o in self.characters.values():
             if o is not src:
-                level, gain = audibility(costs.get(o.pos), volume)
+                level, gain = sound_level(costs.get(o.pos), volume)
                 if level:
                     out.append((o, level, round(gain, 3)))
         return out
