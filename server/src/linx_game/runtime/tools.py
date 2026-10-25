@@ -66,6 +66,15 @@ async def interact(ctx: Context, target: str, action: str) -> str:
     return _act(ctx, "interact", target=target, action=action)
 
 
-@mcp.tool(description="停下：停止移动或正在进行的行动。")
+@mcp.tool(description="中断：放弃正在进行的移动或行动（未完成的进度可能作废）。只在确实要改变主意时调用；"
+                      "想继续手上的事或等待，请用 wait。")
 async def stop(ctx: Context) -> str:
     return _act(ctx, "stop")
+
+
+@mcp.tool(description="等待：什么都不改变，继续手上正在做的事，等待新的情况。")
+async def wait(ctx: Context) -> str:
+    actor = _actor(ctx)
+    if actor is not None:
+        actor[2]("你继续等待。")
+    return "你继续等待。"
