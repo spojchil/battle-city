@@ -7,6 +7,7 @@
 """
 
 import logging
+from collections.abc import Callable
 from typing import Literal
 
 from mcp.server.mcpserver import Context, MCPServer
@@ -17,11 +18,12 @@ log = logging.getLogger("linx_game.tools")
 
 mcp = MCPServer("linx-game")
 
-# 设备 MAC（大写）→ (世界, 角色 id)，由运行时在开局时登记
-actors: dict[str, tuple[World, str]] = {}
+# 设备 MAC（大写）→ (世界, 角色 id, 结果回调)，由运行时在开局时登记；
+# 结果回调把工具执行结果交给角色的思考循环，写入其记忆
+actors: dict[str, tuple[World, str, Callable[[str], None]]] = {}
 
 
-def _actor(ctx: Context) -> tuple[World, str] | None:
+def _actor(ctx: Context) -> tuple[World, str, Callable[[str], None]] | None:
     request = ctx.request_context.request
     device = request.headers.get("x-linx-device-id", "").upper() if request is not None else ""
     return actors.get(device)
@@ -31,10 +33,11 @@ def _act(ctx: Context, name: str, **args) -> str:
     actor = _actor(ctx)
     if actor is None:
         return "当前没有进行中的游戏。"
-    world, cid = actor
+    world, cid, record = actor
     result = getattr(world, name)(cid, **args)
     if name == "say":
         result = "开始说话。"
+    record(result)
     log.info("tool %s %s %s -> %s", cid, name, args, result)
     return result
 

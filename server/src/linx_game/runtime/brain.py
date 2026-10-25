@@ -3,6 +3,8 @@
 每个角色一条 brain 连接：有值得反应的感知（或长时间无事）时，把感知文本作为一轮输入发给灵矽，
 平台调用大模型（经本服务的网关），模型以工具调用行动。网关按本模块组织的上下文请求模型，
 并在本轮结束时通知这里，再发送下一轮，保证同一角色同一时间只有一轮在进行。
+
+角色的记忆由本模块保存：每轮的感知、内心想法、工具调用及其结果，不依赖平台的对话历史。
 """
 
 import asyncio
@@ -14,8 +16,8 @@ from linx_game.runtime.session import LinxSession
 
 log = logging.getLogger("linx_game.brain")
 
-# 没有新感知时，最长隔多久再给角色一次思考机会（秒）
-IDLE_S = 30
+# 剧情进展由感知与提示驱动；没有新感知时，最长隔多久再给角色一次思考机会（秒）
+IDLE_S = 120
 # 被唤醒后等待感知平静下来再思考：一段话按句到达，等对方说完再一并处理（秒）
 SETTLE_S = 1.5
 SETTLE_MAX_S = 6
@@ -31,7 +33,8 @@ PROMPT = """你在操控一场实时语音推理游戏中的角色「{name}」�
 - 正文不会被任何人看到或听到。正文只写角色此刻的内心想法，一两句即可。说出口的每一句话都必须通过 say。
 - 世界按真实时间流动，不会等你。你每次收到的是角色此刻的感知。一次可以调用零到多个工具；暂时不需要行动时，只写想法、不调用工具。
 - 说话像真人对话：口语、简短，一次一两句。只有附近的人听得到你，离得远的人听不到或听不清。
-- 你只知道角色背景和感知中出现的信息，不要编造没有感知到的事。
+- 你只知道角色背景和感知中出现的信息。只有【新的感知】里出现的事才真的发生了，不要臆想没有感知到的事（例如没有来电就不要当作接到了电话）。
+- 身边没有人可以交谈时不要说话，不要自言自语。
 - 任务书里的安排有先后条件，前提还没有发生（例如还没有人告诉你某件事），就不要提前去做。
 - 没有新情况时保持现状，不要为了行动而行动；等待时不要来回走动，也不要重复说过的话。
 - move_to 的目标只能是下面列出的地点、感知中出现的人或可交互的东西。
@@ -62,7 +65,11 @@ class Brain:
         self.world = world
         self.cid = cid
         self.session = session
+        session.on_json = self._on_platform
         self.thoughts: list[tuple[float, str]] = []
+        self.history: list[dict] = []
+        self._pending_calls: list[dict] = []
+        self._results: list[str] = []
         self._wake = asyncio.Event()
         self._turn_done = asyncio.Event()
         char = next(c for c in world.scenario.characters if c.id == cid)
@@ -72,21 +79,40 @@ class Brain:
 
     # 网关回调（llm_gateway.Controller）
     def build(self, messages: list[dict]) -> list[dict]:
-        history = [m for m in messages if m.get("role") != "system"]
-        if len(history) > HISTORY_LIMIT:
-            history = history[-HISTORY_LIMIT:]
-            # 从一条感知开始，避免以孤立的工具结果开头
-            while history and history[0].get("role") != "user":
-                history.pop(0)
+        history = self.history[-HISTORY_LIMIT:]
+        # 从一条感知开始，避免以孤立的工具结果开头
+        while history and history[0].get("role") != "user":
+            history = history[1:]
         return [{"role": "system", "content": self.system}, *EXAMPLE, *history]
 
-    def on_thought(self, text: str) -> None:
-        if text:
-            self.thoughts.append((self.world.now(), text))
-            log.info("thought %s: %s", self.cid, text)
+    def on_reply(self, thought: str, tool_calls: list[dict]) -> None:
+        if thought:
+            self.thoughts.append((self.world.now(), thought))
+            log.info("thought %s: %s", self.cid, thought)
+        message = {"role": "assistant", "content": thought}
+        for i, call in enumerate(tool_calls):
+            call["id"] = call["id"] or f"call_{len(self.history)}_{i}"
+        if tool_calls:
+            message["tool_calls"] = tool_calls
+        self.history.append(message)
+        self._pending_calls = tool_calls
+
+    def record_result(self, result: str) -> None:
+        """行动工具的执行结果，按调用顺序到达。"""
+        self._results.append(result)
+
+    def _flush_results(self) -> None:
+        for call in self._pending_calls:
+            result = self._results.pop(0) if self._results else "已执行。"
+            self.history.append({"role": "tool", "tool_call_id": call["id"], "content": result})
+        self._pending_calls = []
+        self._results.clear()
 
     def on_turn_done(self) -> None:
         self._turn_done.set()
+
+    def _on_platform(self, data: dict) -> None:
+        log.debug("platform %s %s", self.cid, data)
 
     def wake(self) -> None:
         self._wake.set()
@@ -113,6 +139,8 @@ class Brain:
             await self._settle()
             text = perception.render(self.world, self.cid, self.world.drain(self.cid))
             self._turn_done.clear()
+            self._flush_results()
+            self.history.append({"role": "user", "content": text})
             log.info("perceive %s:\n%s", self.cid, text)
             await self.session.send_text(text)
             try:

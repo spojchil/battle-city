@@ -97,6 +97,8 @@ def build_app(scenario_path: Path):
 def main() -> None:
     load_dotenv(find_dotenv(usecwd=True))
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
+    if os.getenv("GAME_DEBUG") == "1":
+        logging.getLogger("linx_game").setLevel(logging.DEBUG)
     scenario = Path(os.getenv("GAME_SCENARIO", REPO_ROOT / "scenarios" / "hotel_lobby" / "scenario.yaml"))
     uvicorn.run(build_app(scenario), host="0.0.0.0", port=int(os.getenv("PORT", "8000")))
 
