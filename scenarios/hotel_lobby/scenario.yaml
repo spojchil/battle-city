@@ -323,7 +323,7 @@ characters:
   - id: zhao
     name: 赵永刚
     role: 维修工
-    voice: ""
+    voice: "9d91653b2adf4aa9ad97e1c8f63fbda3"   # 灵矽音色：磁性低音男
     start: [9, 1]
     player: false
     card: |
@@ -367,7 +367,7 @@ characters:
   - id: liu
     name: 刘桂芳
     role: 保洁
-    voice: ""
+    voice: "8fca6d5172fc4c309c2d16352ca8a9b3"   # 灵矽音色：温暖治愈女
     start: [3, 14]
     player: false
     card: |
@@ -401,7 +401,7 @@ characters:
   - id: lin
     name: 林晓雨
     role: 前台
-    voice: ""
+    voice: "5091ae249515481d85c1f2aa82b6b5cd"   # 灵矽音色：邻家女孩
     start: [16, 5]
     player: false
     card: |
@@ -427,7 +427,7 @@ characters:
   - id: zhou
     name: 周建明
     role: 值班经理
-    voice: ""
+    voice: "9fe804bde57f44a2a4150b793939eb29"   # 灵矽音色：博才干练男
     start: [20, 6]
     player: false
     card: |
@@ -456,7 +456,7 @@ characters:
   - id: wang
     name: 王浩
     role: 住客
-    voice: ""
+    voice: "cc73f0728da44e7b934ac48a0a644e28"   # 灵矽音色：积极向上男
     start: [9, 6]
     player: false
     card: |
@@ -482,7 +482,7 @@ characters:
   - id: chen
     name: 陈曼
     role: 住客
-    voice: ""
+    voice: "d00a182bb5c84377ac317b060cb6ad05"   # 灵矽音色：高冷御姐
     start: [2, 5]
     player: false
     card: |

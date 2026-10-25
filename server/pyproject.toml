@@ -17,6 +17,8 @@ dependencies = [
 ]
 
 [project.scripts]
+linx-game = "linx_game.app:main"
+linx-provision = "linx_game.devtools.provision:main"
 linx-game-probe = "linx_game.probe:main"
 linx-vdevice = "linx_game.devtools.vdevice:main"
 linx-enroll = "linx_game.devtools.enroll:main"
