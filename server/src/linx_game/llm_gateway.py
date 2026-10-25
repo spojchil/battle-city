@@ -11,6 +11,9 @@ import asyncio
 import json
 import logging
 import os
+import time
+import uuid
+from typing import Protocol
 
 import httpx
 from starlette.applications import Starlette
@@ -24,6 +27,25 @@ log = logging.getLogger("linx_game.llm_gateway")
 BODY_OVERRIDES = {
     "moonshotai/kimi-k3-free": {"thinking": {"type": "disabled"}},
 }
+
+
+class Controller(Protocol):
+    """游戏角色的上下文控制器，由运行时按设备注册。"""
+
+    def build(self, messages: list[dict]) -> list[dict]:
+        """以平台转发的消息为基础，返回实际发给模型的完整消息列表。"""
+
+    def on_thought(self, text: str) -> None:
+        """模型正文（角色内心想法），不回传平台，不会被播报。"""
+
+    def on_turn_done(self) -> None:
+        """本轮结束：模型未调用工具，或工具结果已返回。"""
+
+
+# 按设备 MAC 注册：controllers 中的设备由运行时组织上下文；
+# silent_devices 中的设备（例如只做语音识别的玩家连接）不调用模型，直接返回空回复。
+controllers: dict[str, Controller] = {}
+silent_devices: set[str] = set()
 
 
 # 平台在智能体提示词前后追加的通用内容：语言声明、终端位置、输出格式限制、节日与时间。
@@ -96,6 +118,17 @@ async def chat_completions(request: Request) -> Response:
         return JSONResponse({"error": "unauthorized"}, status_code=401)
 
     body = await request.json()
+    device = request.headers.get("x-linx-device-id", "").upper()
+    if device in silent_devices:
+        return _empty_reply(body)
+    controller = controllers.get(device)
+    if controller is not None:
+        messages = body.get("messages", [])
+        # 工具结果返回后平台会再请求一次模型；角色的行动已由工具完成，这一轮直接结束
+        if messages and messages[-1].get("role") == "tool":
+            controller.on_turn_done()
+            return _empty_reply(body)
+        body["messages"] = controller.build(messages)
     body.update(BODY_OVERRIDES.get(body.get("model"), {}))
     for message in body.get("messages", []):
         if message.get("role") == "system" and isinstance(message.get("content"), str):
@@ -131,16 +164,52 @@ async def chat_completions(request: Request) -> Response:
         try:
             async for chunk in upstream.aiter_raw():
                 buffer += chunk
-                yield chunk
+                if controller is None:
+                    yield chunk
+            if controller is not None:
+                # 正文是角色的内心想法，不回传平台，避免被播报
+                thought, stripped = _strip_content(buffer)
+                yield stripped
+                controller.on_thought(thought)
+                if b'"tool_calls"' not in buffer:
+                    controller.on_turn_done()
         finally:
             await upstream.aclose()
             await client.aclose()
-            log.info("reply %s", json.dumps(_reply_text(buffer), ensure_ascii=False))
+            log.info("reply device=%s %s", device, json.dumps(_reply_text(buffer), ensure_ascii=False))
 
     return StreamingResponse(
         relay(), status_code=upstream.status_code,
         media_type=upstream.headers.get("content-type", "application/json"),
     )
+
+
+def _strip_content(raw: bytes) -> tuple[str, bytes]:
+    """清空 SSE 流（或普通 JSON）中的正文，返回 (正文, 改写后的响应)。"""
+    thought, lines = [], []
+    for line in raw.decode(errors="replace").split("\n"):
+        payload = line.removeprefix("data: ").strip()
+        if payload.startswith("{"):
+            data = json.loads(payload)
+            for choice in data.get("choices") or []:
+                msg = choice.get("delta") or choice.get("message") or {}
+                if msg.get("content"):
+                    thought.append(msg["content"])
+                    msg["content"] = ""
+            line = ("data: " if line.startswith("data:") else "") + json.dumps(data, ensure_ascii=False)
+        lines.append(line)
+    return "".join(thought).strip(), "\n".join(lines).encode()
+
+
+def _empty_reply(body: dict) -> Response:
+    """不调用模型，返回一条空的助手回复。"""
+    base = {"id": f"chatcmpl-{uuid.uuid4().hex}", "created": int(time.time()), "model": body.get("model")}
+    if not body.get("stream"):
+        return JSONResponse({**base, "object": "chat.completion", "choices": [
+            {"index": 0, "message": {"role": "assistant", "content": ""}, "finish_reason": "stop"}]})
+    chunk = {**base, "object": "chat.completion.chunk", "choices": [
+        {"index": 0, "delta": {"role": "assistant", "content": ""}, "finish_reason": "stop"}]}
+    return Response(f"data: {json.dumps(chunk)}\n\ndata: [DONE]\n\n", media_type="text/event-stream")
 
 
 def _reply_text(raw: bytes) -> str:
